@@ -1,0 +1,16 @@
+use mcp_server::memory::service::MemoryService;
+use mcp_server::config::MemoryConfig;
+
+#[tokio::test]
+async fn test_memory_service_can_be_created() {
+    let config = MemoryConfig { base_dir: "./tests/data/test_data".to_string(), ..Default::default() };
+    let service = MemoryService::new(&config).await;
+    assert!(service.is_ok(), "Memory service should be created successfully");
+}
+
+#[tokio::test]
+async fn test_memory_service_handles_invalid_path() {
+    let config = MemoryConfig { base_dir: "/invalid/path/that/does/not/exist".to_string(), ..Default::default() };
+    let service = MemoryService::new(&config).await;
+    assert!(service.is_err(), "Memory service should fail with invalid path");
+}

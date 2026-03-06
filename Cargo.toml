@@ -1,0 +1,41 @@
+[package]
+name = "mcp-server"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# Async runtime
+tokio = { version = "1.0", features = ["full"] }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# SQLite for semantic storage
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+# Time handling
+chrono = "0.4"
+
+# Utilities
+once_cell = "1.18"
+
+# UUID generation
+uuid = { version = "1.0", features = ["v4"] }
+
+# Local embeddings
+fastembed = "5.11.0"
+
+# Error handling
+thiserror = "1.0"
+
+# HTTP server
+actix-web = "4"
+
+# OIDC JWT verification
+jsonwebtoken = "9"
+reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+
+[dev-dependencies]
+serde_json = "1.0"
+tempfile = "3.0"

@@ -1,0 +1,58 @@
+# Nextest configuration for MCP Server
+# This ensures all tests are properly discovered and run
+
+[profile.default]
+# Run all tests in the tests directory
+test-groups = ["unit", "integration"]
+
+# Increase retries for flaky tests
+retries = 2
+
+# Enable failure output
+failure-output = "immediate"
+
+# Parallelism settings
+threads-required = 4
+threads-max = 16
+
+# Timeout settings
+timeout = "30s"
+leak-timeout = "10s"
+
+# Output formatting
+status-level = "pass"
+
+# CI-specific profile
+[profile.ci]
+retries = 3
+threads-required = 2
+threads-max = 8
+timeout = "60s"
+
+# Enable test filtering
+[profile.default.filter]
+# Run all tests by default
+default = true
+
+# Custom test profiles
+[profile.quick]
+extend = "default"
+retries = 1
+threads-max = 4
+
+[profile.full]
+extend = "default"
+retries = 3
+threads-max = 1
+leak-timeout = "30s"
+
+# Test output configuration
+[profile.default.output]
+# Show full test names
+format = "list"
+
+# Test failure handling
+[profile.default.fail-fast]
+# Stop after first failure in CI
+ci = true
+local = false
