@@ -1,0 +1,184 @@
+# workflows.yaml -- mcp-server (semantic-memory-mcp) CI pipeline
+#
+# Runs on every push via wfe-server webhook → ci workflow.
+# Pure Rust MCP server binary with SQLite + fastembed for local semantic
+# memory. No external services, no publish (not yet on the sunbeam cargo
+# registry), no image (distributed as a source-built binary for now).
+#
+# === Prerequisites ===
+#
+# 1. wfe-server deployed (see ../sbbb/base/wfe/)
+# 2. wfe-credentials Secret with sccache-*, aws-* keys
+# 3. wfe-ci image at src.sunbeam.pt/studio/wfe-ci:latest
+
+# --- Shared Templates ---
+
+_templates:
+
+  ci_env: &ci_env
+    SCCACHE_BUCKET: ${WFE_SCCACHE_BUCKET}
+    SCCACHE_REGION: ${WFE_SCCACHE_REGION}
+    SCCACHE_ENDPOINT: ${WFE_SCCACHE_S3_ENDPOINT}
+    SCCACHE_S3_USE_SSL: "true"
+    AWS_ACCESS_KEY_ID: ${WFE_AWS_ACCESS_KEY_ID}
+    AWS_SECRET_ACCESS_KEY: ${WFE_AWS_SECRET_ACCESS_KEY}
+    CARGO_HOME: /workspace/.cargo
+    RUSTC_WRAPPER: /usr/local/cargo/bin/sccache
+    CARGO_INCREMENTAL: "0"
+
+  ci_config: &ci_config
+    image: src.sunbeam.pt/studio/wfe-ci:latest
+    memory: 4Gi
+    cpu: "2"
+    timeout: 30m
+    env: *ci_env
+
+  ci_long_config: &ci_long_config
+    image: src.sunbeam.pt/studio/wfe-ci:latest
+    memory: 8Gi
+    cpu: "4"
+    timeout: 60m
+    env: *ci_env
+
+# --- Workflows ---
+
+workflows:
+
+  # === checkout ===
+
+  - id: checkout
+    name: Checkout
+    version: 1
+    inputs:
+      repo_url: string
+      commit_sha: string
+    outputs:
+      checkout_ok: bool
+      commit: string
+    steps:
+      - name: clone
+        type: kubernetes
+        outputs:
+          - name: checkout_ok
+          - name: commit
+        config:
+          <<: *ci_config
+          run: |
+            set -euo pipefail
+            cd /workspace
+            if [ ! -d mcp-server ]; then
+              git clone "$REPO_URL" mcp-server
+            fi
+            cd mcp-server
+            git fetch --all
+            git checkout "$COMMIT_SHA"
+            COMMIT=$(git rev-parse HEAD)
+            echo "Checked out: $COMMIT"
+            echo "##wfe[output checkout_ok=true]"
+            echo "##wfe[output commit=$COMMIT]"
+
+  # === lint: fmt + clippy ===
+
+  - id: lint
+    name: Lint
+    version: 1
+    outputs:
+      fmt_ok: bool
+      clippy_ok: bool
+    steps:
+      - name: fmt-check
+        type: kubernetes
+        outputs:
+          - name: fmt_ok
+        config:
+          <<: *ci_config
+          run: |
+            set -euo pipefail
+            cd /workspace/mcp-server
+            cargo fmt --all -- --check
+            echo "##wfe[output fmt_ok=true]"
+
+      - name: clippy
+        type: kubernetes
+        outputs:
+          - name: clippy_ok
+        config:
+          <<: *ci_long_config
+          run: |
+            set -euo pipefail
+            cd /workspace/mcp-server
+            cargo clippy --all-targets -- -D warnings
+            echo "##wfe[output clippy_ok=true]"
+
+  # === test-unit: lib + integration tests (all self-contained) ===
+
+  - id: test-unit
+    name: Unit Tests
+    version: 1
+    outputs:
+      lib_ok: bool
+      integration_ok: bool
+    steps:
+      - name: lib-tests
+        type: kubernetes
+        outputs:
+          - name: lib_ok
+        config:
+          <<: *ci_long_config
+          run: |
+            set -euo pipefail
+            cd /workspace/mcp-server
+            cargo nextest run --lib
+            echo "##wfe[output lib_ok=true]"
+
+      - name: integration-tests
+        type: kubernetes
+        outputs:
+          - name: integration_ok
+        config:
+          <<: *ci_long_config
+          run: |
+            set -euo pipefail
+            cd /workspace/mcp-server
+            cargo nextest run --tests
+            echo "##wfe[output integration_ok=true]"
+
+  # === ci: top-level orchestrator ===
+
+  - id: ci
+    name: Continuous Integration
+    version: 1
+    inputs:
+      repo_url: string
+      commit_sha: string
+      branch: string?
+    outputs:
+      lib_ok: bool
+      integration_ok: bool
+
+    steps:
+      - name: run-checkout
+        type: workflow
+        outputs:
+          - name: commit
+        config:
+          workflow: checkout
+          version: 1
+
+      - name: run-lint
+        type: workflow
+        outputs:
+          - name: fmt_ok
+          - name: clippy_ok
+        config:
+          workflow: lint
+          version: 1
+
+      - name: run-tests
+        type: workflow
+        outputs:
+          - name: lib_ok
+          - name: integration_ok
+        config:
+          workflow: test-unit
+          version: 1
