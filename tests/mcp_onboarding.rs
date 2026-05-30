@@ -16,8 +16,15 @@ use mcp_server::{
     config::MemoryConfig,
     memory::service::MemoryService,
     mcp::{protocol::Request, server::handle},
+    indexer::{IndexService, IndexWatcher},
 };
 use serde_json::{json, Value};
+
+fn setup_indexer(memory: &MemoryService) -> IndexService {
+    let (tx, rx) = crossbeam_channel::bounded(1);
+    let watcher = IndexWatcher::new(tx).unwrap();
+    IndexService::new(memory.clone(), rx, watcher)
+}
 
 // ── corpus ────────────────────────────────────────────────────────────────────
 
@@ -51,7 +58,7 @@ const CODE: &[&str] = &[
     "pub async fn handle(req: &Request, memory: &MemoryService) -> Option<Response> // None for notifications",
     "pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 // dot product divided by product of L2 norms",
     "pub struct SemanticIndex { vectors: HashMap<String, Vec<f32>> } // in-memory cosine index",
-    "pub async fn hybrid_search(&self, keyword: &str, query_embedding: &[f32], limit: usize) -> Result<Vec<SemanticFact>>",
+    "pub async fn fused_search(&self, query: &str, query_embedding: &[f32], limit: usize, namespace_filter: Option<&str>) -> Result<Vec<(SemanticFact, f32)>>",
 ];
 
 /// Semantic prose descriptions of what the code does — bridges English queries to code concepts.
@@ -62,9 +69,9 @@ const INDEX: &[&str] = &[
      query; the query is embedded and stored vectors are ranked by cosine similarity",
     "Deleting a memory removes the row from SQLite and evicts the vector from the \
      in-memory HashMap index so it never appears in future search results",
-    "The hybrid_search operation filters facts whose text contains a keyword then \
-     ranks those candidates by vector similarity; when no keyword matches it falls \
-     back to pure vector search so callers always receive useful results",
+    "The fused_search operation combines BM25 keyword relevance (via FTS5) with \
+     vector similarity using Reciprocal Rank Fusion (RRF) so callers always receive \
+     useful results even when one modality produces no matches",
     "Each fact is assigned a UUID as its ID and a Unix timestamp for ordering; \
      list_facts returns facts in a namespace sorted newest-first",
     "Switching embedding models replaces the EmbeddingService held inside a Mutex; \
@@ -84,12 +91,13 @@ fn req(method: &str, params: Value, id: u64) -> Request {
 }
 
 async fn store(memory: &MemoryService, namespace: &str, content: &str, source: Option<&str>, id: u64) {
+    let indexer = setup_indexer(memory);
     let mut args = json!({ "namespace": namespace, "content": content });
     if let Some(s) = source {
         args["source"] = json!(s);
     }
     let r = req("tools/call", json!({ "name": "store_fact", "arguments": args }), id);
-    let resp = handle(&r, memory).await.expect("response");
+    let resp = handle(&r, memory, &indexer).await.expect("response");
     assert!(resp.error.is_none(), "store_fact RPC error: {:?}", resp.error);
     let result = resp.result.as_ref().expect("result");
     assert!(
@@ -107,12 +115,13 @@ async fn search(
     namespace: Option<&str>,
     id: u64,
 ) -> String {
+    let indexer = setup_indexer(memory);
     let mut args = json!({ "query": query, "limit": limit });
     if let Some(ns) = namespace {
         args["namespace"] = json!(ns);
     }
     let r = req("tools/call", json!({ "name": "search_facts", "arguments": args }), id);
-    let resp = handle(&r, memory).await.expect("response");
+    let resp = handle(&r, memory, &indexer).await.expect("response");
     assert!(resp.error.is_none(), "search_facts RPC error: {:?}", resp.error);
     let result = resp.result.as_ref().expect("result");
     result["content"][0]["text"]
@@ -218,10 +227,10 @@ async fn test_onboard_code_search() {
     eprintln!("\n── Q: {q}\n{result}");
     assert_hit(&result, &["cosine_similarity", "f32", "norm", "dot"], q);
 
-    let q = "hybrid keyword and vector search";
+    let q = "fused bm25 and vector search";
     let result = search(&memory, q, 3, Some("code"), 104).await;
     eprintln!("\n── Q: {q}\n{result}");
-    assert_hit(&result, &["hybrid_search", "keyword", "embedding"], q);
+    assert_hit(&result, &["fused_search", "bm25", "embedding", "rrf"], q);
 
     // Verify source URNs appear in results
     let q = "function signature for adding facts";
@@ -265,5 +274,5 @@ async fn test_onboard_code_semantic() {
     let q = "searching with a keyword plus vector";
     let result = search(&memory, q, 3, Some("index"), 103).await;
     eprintln!("\n── Q: {q}\n{result}");
-    assert_hit(&result, &["hybrid", "keyword", "vector", "cosine", "falls back"], q);
+    assert_hit(&result, &["fused", "keyword", "vector", "bm25", "rrf"], q);
 }
