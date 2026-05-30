@@ -1,3 +1,34 @@
-.fastembed_cache/
-target/
+# Rust build artifacts
+/target/
 
+# Cargo local config (may contain machine-specific paths like sccache)
+.cargo/
+
+# FastEmbed cache
+.fastembed_cache/
+
+# Generated SQLite databases
+*.db
+
+# Generated HNSW index files
+*.hnsw.graph
+*.hnsw.data
+
+# Runtime data directories
+data/memory/
+
+# Test artifacts not referenced by source
+alice-in-wonderland.txt
+
+# macOS
+.DS_Store
+
+# Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Environment
+.env
