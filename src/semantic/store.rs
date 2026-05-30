@@ -4,22 +4,18 @@ use crate::error::Result;
 use crate::semantic::{SemanticConfig, SemanticFact};
 use std::sync::{Arc, Mutex};
 
-/// Semantic store using SQLite for persistence and an in-memory cosine-similarity index.
+/// Semantic store using SQLite for persistence and sqlite-vec for vector search.
 pub struct SemanticStore {
     config: SemanticConfig,
     db: Arc<Mutex<super::db::SemanticDB>>,
-    index: Arc<Mutex<super::index::SemanticIndex>>,
 }
 
 impl SemanticStore {
     pub async fn new(config: &SemanticConfig) -> Result<Self> {
-        let db = Arc::new(Mutex::new(super::db::SemanticDB::new(&config.base_dir)?));
-        let index = Arc::new(Mutex::new(super::index::SemanticIndex::new(config.dimension)));
-
+        let db = Arc::new(Mutex::new(super::db::SemanticDB::new(&config.base_dir, config.dimension)?));
         Ok(Self {
             config: config.clone(),
             db,
-            index,
         })
     }
 
@@ -41,8 +37,6 @@ impl SemanticStore {
         };
 
         let (fact_id, created_at) = self.db.lock().unwrap().add_fact(&fact)?;
-        self.index.lock().unwrap().add_vector(embedding, &fact_id);
-
         Ok((fact_id, created_at))
     }
 
@@ -55,31 +49,7 @@ impl SemanticStore {
         limit: usize,
         namespace_filter: Option<&str>,
     ) -> Result<Vec<(SemanticFact, f32)>> {
-        let search_limit = if namespace_filter.is_some() {
-            (limit * 10).max(50)
-        } else {
-            limit
-        };
-
-        let similar_ids = self.index.lock().unwrap().search(query_embedding, search_limit);
-
-        let mut results = vec![];
-        for (fact_id, score) in similar_ids {
-            if results.len() >= limit {
-                break;
-            }
-            if let Some(fact) = self.db.lock().unwrap().get_fact(&fact_id)? {
-                if let Some(namespace) = namespace_filter {
-                    if fact.namespace == namespace {
-                        results.push((fact, score));
-                    }
-                } else {
-                    results.push((fact, score));
-                }
-            }
-        }
-
-        Ok(results)
+        self.db.lock().unwrap().search_similar(query_embedding, limit, namespace_filter)
     }
 
     /// Return facts in a namespace ordered by creation time, without scoring.
@@ -94,48 +64,18 @@ impl SemanticStore {
         self.db.lock().unwrap().search_by_namespace(namespace, limit, from_ts, to_ts)
     }
 
-    /// Hybrid search: keyword filter + vector ranking.
+    /// Fused BM25 + vector search via Reciprocal Rank Fusion.
     ///
-    /// If any facts contain `keyword`, those are ranked by vector similarity and
-    /// the top `limit` are returned.  If no facts contain the keyword the search
-    /// falls back to a pure vector search over all facts so callers always get
-    /// useful results.
-    pub async fn hybrid_search(
+    /// Combines BM25 keyword relevance (via FTS5) with cosine vector similarity
+    /// using RRF (k=60). This is the default search path.
+    pub async fn fused_search(
         &self,
-        keyword: &str,
+        query: &str,
         query_embedding: &[f32],
         limit: usize,
-    ) -> Result<Vec<SemanticFact>> {
-        let all_facts = self.db.lock().unwrap().get_all_facts()?;
-        let keyword_lower = keyword.to_lowercase();
-
-        let keyword_matches: Vec<SemanticFact> = all_facts
-            .iter()
-            .filter(|f| f.content.to_lowercase().contains(&keyword_lower))
-            .cloned()
-            .collect();
-
-        // Fall back to all facts when the keyword matches nothing, rather than
-        // returning an empty result that is worse than a plain vector search.
-        let candidates = if keyword_matches.is_empty() {
-            all_facts
-        } else {
-            keyword_matches
-        };
-
-        let mut scored: Vec<(SemanticFact, f32)> = candidates
-            .into_iter()
-            .map(|fact| {
-                let sim = super::index::SemanticIndex::cosine_similarity(
-                    query_embedding,
-                    &fact.embedding,
-                );
-                (fact, sim)
-            })
-            .collect();
-
-        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-        Ok(scored.into_iter().take(limit).map(|(f, _)| f).collect())
+        namespace_filter: Option<&str>,
+    ) -> Result<Vec<(SemanticFact, f32)>> {
+        self.db.lock().unwrap().fused_search(query, query_embedding, limit, namespace_filter)
     }
 
     /// Update an existing fact in place. Re-embeds with the new content and
@@ -147,20 +87,12 @@ impl SemanticStore {
         embedding: &[f32],
         source: Option<&str>,
     ) -> Result<bool> {
-        let updated = self.db.lock().unwrap().update_fact(fact_id, content, source, embedding)?;
-        if updated {
-            self.index.lock().unwrap().add_vector(embedding, fact_id);
-        }
-        Ok(updated)
+        self.db.lock().unwrap().update_fact(fact_id, content, source, embedding)
     }
 
     /// Delete a fact from both the database and the vector index.
     pub async fn delete_fact(&self, fact_id: &str) -> Result<bool> {
-        let deleted = self.db.lock().unwrap().delete_fact(fact_id)?;
-        if deleted {
-            self.index.lock().unwrap().remove_vector(fact_id);
-        }
-        Ok(deleted)
+        self.db.lock().unwrap().delete_fact(fact_id)
     }
 
     /// Get a fact by ID.
@@ -170,5 +102,47 @@ impl SemanticStore {
 
     pub fn get_base_dir(&self) -> String {
         self.config.base_dir.clone()
+    }
+
+    pub fn dimension(&self) -> usize {
+        self.config.dimension
+    }
+
+    /// Direct access to the underlying database (for indexer and advanced use).
+    pub fn db(&self) -> Arc<Mutex<super::db::SemanticDB>> {
+        self.db.clone()
+    }
+
+    /// Rebuild the vector table with a new dimension and re-embed all facts.
+    /// Returns the number of facts re-embedded.
+    pub async fn rebuild_vectors<F>(
+        &self,
+        new_dimension: usize,
+        mut embed_fn: F,
+    ) -> Result<usize>
+    where
+        F: FnMut(&[&str]) -> Result<Vec<Vec<f32>>>,
+    {
+        let facts = {
+            let mut db = self.db.lock().unwrap();
+            db.recreate_vec_table(new_dimension)?;
+            db.get_all_facts(false)?
+        };
+
+        let total = facts.len();
+        for (i, fact) in facts.iter().enumerate() {
+            let embeddings = embed_fn(&[&fact.content])?;
+            if let Some(emb) = embeddings.first() {
+                let mut db = self.db.lock().unwrap();
+                db.insert_vec(&fact.id, emb)?;
+            }
+            if (i + 1) % 100 == 0 || i + 1 == total {
+                let mut db = self.db.lock().unwrap();
+                let err_id = ulid::Ulid::new().to_string();
+                let _ = db.log_error(&err_id, "semantic", "warn", &format!("re-embedded {}/{} facts", i + 1, total), None);
+            }
+        }
+
+        Ok(total)
     }
 }

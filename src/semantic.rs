@@ -3,7 +3,7 @@
 
 pub mod db;
 pub mod store;
-pub mod index;
+// index.rs removed — replaced by persistent sqlite-vec indexing
 // search.rs removed — SemanticSearch was dead code, functionality lives in store.rs
 
 /// Semantic fact storage
@@ -27,7 +27,10 @@ pub struct SemanticConfig {
 impl Default for SemanticConfig {
     fn default() -> Self {
         Self {
-            base_dir: "./data/semantic".to_string(),
+            base_dir: crate::paths::data_dir()
+                .join("semantic")
+                .to_string_lossy()
+                .to_string(),
             dimension: 768,
             model_name: "bge-base-en-v1.5".to_string(),
         }
