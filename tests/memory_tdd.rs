@@ -3,7 +3,8 @@ use mcp_server::config::MemoryConfig;
 
 #[tokio::test]
 async fn test_memory_service_can_be_created() {
-    let config = MemoryConfig { base_dir: "./tests/data/test_data".to_string(), ..Default::default() };
+    let dir = tempfile::tempdir().unwrap();
+    let config = MemoryConfig { base_dir: dir.path().to_str().unwrap().to_string(), ..Default::default() };
     let service = MemoryService::new(&config).await;
     assert!(service.is_ok(), "Memory service should be created successfully");
 }

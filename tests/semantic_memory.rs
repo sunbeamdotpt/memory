@@ -3,7 +3,8 @@ use mcp_server::config::MemoryConfig;
 
 #[tokio::test]
 async fn test_memory_service_can_add_fact_to_semantic_memory() {
-    let config = MemoryConfig { base_dir: "./tests/data/test_semantic_data".to_string(), ..Default::default() };
+    let dir = tempfile::tempdir().unwrap();
+    let config = MemoryConfig { base_dir: dir.path().to_str().unwrap().to_string(), ..Default::default() };
 
     let service = MemoryService::new(&config).await.unwrap();
 
@@ -20,7 +21,8 @@ async fn test_memory_service_can_add_fact_to_semantic_memory() {
 
 #[tokio::test]
 async fn test_memory_service_can_search_semantic_memory() {
-    let config = MemoryConfig { base_dir: "./tests/data/test_semantic_search".to_string(), ..Default::default() };
+    let dir = tempfile::tempdir().unwrap();
+    let config = MemoryConfig { base_dir: dir.path().to_str().unwrap().to_string(), ..Default::default() };
 
     let service = MemoryService::new(&config).await.unwrap();
 
@@ -45,7 +47,8 @@ async fn test_memory_service_handles_semantic_errors() {
 
 #[tokio::test]
 async fn test_memory_service_can_delete_facts() {
-    let config = MemoryConfig { base_dir: "./tests/data/test_semantic_delete".to_string(), ..Default::default() };
+    let dir = tempfile::tempdir().unwrap();
+    let config = MemoryConfig { base_dir: dir.path().to_str().unwrap().to_string(), ..Default::default() };
 
     let service = MemoryService::new(&config).await.unwrap();
 

@@ -77,8 +77,11 @@ impl ModelCache {
             return Ok(Arc::clone(model));
         }
 
+        let cache_dir = crate::paths::model_cache_dir();
+        std::fs::create_dir_all(&cache_dir).ok();
         let text_embedding = TextEmbedding::try_new(
             InitOptions::new(model_type.to_fastembed_model())
+                .with_cache_dir(cache_dir)
         ).map_err(|e| EmbeddingError::LoadError(e.to_string()))?;
 
         let model = Arc::new(Mutex::new(text_embedding));
@@ -95,6 +98,7 @@ static MODEL_CACHE: Lazy<Mutex<ModelCache>> = Lazy::new(|| Mutex::new(ModelCache
 pub struct EmbeddingService {
     model: CachedModel,
     model_type: EmbeddingModelType,
+    query_cache: Arc<Mutex<HashMap<String, Vec<f32>>>>,
 }
 
 impl EmbeddingService {
@@ -102,11 +106,46 @@ impl EmbeddingService {
     /// only happens the first time a given model type is requested.
     pub async fn new(model_type: EmbeddingModelType) -> Result<Self, EmbeddingError> {
         let model = MODEL_CACHE.lock().unwrap().get_or_load(model_type)?;
-        Ok(Self { model, model_type })
+        Ok(Self { model, model_type, query_cache: Arc::new(Mutex::new(HashMap::new())) })
     }
 
-    /// Generate embeddings using the cached model.
+    /// Generate embeddings using the cached model (runs in spawn_blocking).
+    /// Identical texts are served from an in-memory cache to guarantee
+    /// deterministic results across repeated calls.
     pub async fn embed(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, EmbeddingError> {
+        // Fast path: all texts cached
+        {
+            let cache = self.query_cache.lock().unwrap();
+            if texts.iter().all(|t| cache.contains_key(*t)) {
+                return Ok(texts.iter().map(|t| cache.get(*t).unwrap().clone()).collect());
+            }
+        }
+
+        let model = self.model.clone();
+        let texts: Vec<String> = texts.iter().map(|s| s.to_string()).collect();
+        let texts_for_cache = texts.clone();
+        let embeddings = tokio::task::spawn_blocking(move || {
+            let texts_refs: Vec<&str> = texts.iter().map(|s| s.as_str()).collect();
+            model.lock().unwrap()
+                .embed(&texts_refs, None)
+                .map_err(|e| EmbeddingError::GenerationError(e.to_string()))
+        })
+        .await
+        .map_err(|e| EmbeddingError::GenerationError(format!("spawn_blocking failed: {e}")))??;
+
+        // Populate cache
+        {
+            let mut cache = self.query_cache.lock().unwrap();
+            for (text, embedding) in texts_for_cache.iter().zip(embeddings.iter()) {
+                cache.insert(text.clone(), embedding.clone());
+            }
+        }
+
+        Ok(embeddings)
+    }
+
+    /// Synchronous embed for use inside spawn_blocking.
+    pub fn blocking_embed(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, EmbeddingError> {
         self.model
             .lock()
             .unwrap()

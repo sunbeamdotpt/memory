@@ -252,7 +252,7 @@ impl SourceUrn {
 
         // Fragment splits on the first '#'; the fragment may itself contain '#'.
         let (body, fragment) = match rest.split_once('#') {
-            Some((b, f)) if f.is_empty() => {
+            Some((_b, f)) if f.is_empty() => {
                 return Err(UrnError("fragment after '#' must not be empty".to_string()));
             }
             Some((b, f)) => (b, Some(f.to_string())),
@@ -817,5 +817,51 @@ mod tests {
         
         // Empty path
         assert!(SourceUrn::build_git_urn("github.com", Some("acme"), "repo", "main", "", None).is_err());
+    }
+
+    #[test]
+    fn test_content_type_labels() {
+        assert_eq!(ContentType::Code.label(), "source code");
+        assert_eq!(ContentType::Doc.label(), "documentation");
+        assert_eq!(ContentType::Web.label(), "web page");
+        assert_eq!(ContentType::Data.label(), "data record");
+        assert_eq!(ContentType::Note.label(), "note");
+        assert_eq!(ContentType::Conf.label(), "configuration");
+    }
+
+    #[test]
+    fn test_origin_labels() {
+        assert_eq!(Origin::Git.label(), "git repository");
+        assert_eq!(Origin::Fs.label(), "local file");
+        assert_eq!(Origin::Https.label(), "web URL");
+        assert_eq!(Origin::Http.label(), "web URL");
+        assert_eq!(Origin::Db.label(), "database");
+        assert_eq!(Origin::Api.label(), "API endpoint");
+        assert_eq!(Origin::Manual.label(), "manually authored");
+    }
+
+    #[test]
+    fn test_invalid_git_urn_extractors() {
+        let invalid = SourceUrn::parse("urn:smem:code:git:github.com:acme:repo:main").unwrap();
+        assert!(!invalid.is_valid_git_urn());
+        assert_eq!(invalid.extract_git_host(), None);
+        assert_eq!(invalid.extract_git_org(), None);
+        assert_eq!(invalid.extract_git_repo(), None);
+        assert_eq!(invalid.extract_git_branch(), None);
+        assert_eq!(invalid.extract_git_path(), None);
+    }
+
+    #[test]
+    fn test_human_readable_line_fragment() {
+        let urn = SourceUrn::parse("urn:smem:code:fs:/home/user/file.rs#L42").unwrap();
+        let desc = urn.human_readable();
+        assert!(desc.contains("(L42)"));
+    }
+
+    #[test]
+    fn test_human_readable_slug_fragment() {
+        let urn = SourceUrn::parse("urn:smem:doc:https:docs.example.com/api#authentication").unwrap();
+        let desc = urn.human_readable();
+        assert!(desc.contains("§authentication"));
     }
 }

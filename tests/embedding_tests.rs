@@ -38,16 +38,34 @@ async fn test_model_switching_works() {
     use mcp_server::memory::service::MemoryService;
     use mcp_server::config::MemoryConfig;
 
-    let config = MemoryConfig { base_dir: "./tests/data/test_data".to_string(), ..Default::default() };
+    let dir = tempfile::tempdir().unwrap();
+    let config = MemoryConfig { base_dir: dir.path().to_str().unwrap().to_string(), ..Default::default() };
 
     let service = MemoryService::new_with_model(
         &config,
         EmbeddingModelType::BgeBaseEnglish,
     ).await.unwrap();
 
-    assert_eq!(service.current_model(), EmbeddingModelType::BgeBaseEnglish);
+    assert_eq!(service.current_model().await, EmbeddingModelType::BgeBaseEnglish);
 
     let switch_result: Result<(), mcp_server::error::ServerError> =
         service.switch_model(EmbeddingModelType::CodeBert).await;
     assert!(switch_result.is_ok(), "Should be able to switch models");
+}
+
+#[tokio::test]
+async fn test_embedding_service_current_model_and_dimensions() {
+    let service = EmbeddingService::new(EmbeddingModelType::CodeBert).await.unwrap();
+    assert_eq!(service.current_model(), EmbeddingModelType::CodeBert);
+    assert_eq!(service.dimensions(), 768);
+}
+
+#[test]
+fn test_embedding_model_type_properties() {
+    assert_eq!(EmbeddingModelType::BgeBaseEnglish.model_name(), "bge-base-en-v1.5");
+    assert_eq!(EmbeddingModelType::CodeBert.model_name(), "codebert");
+    assert_eq!(EmbeddingModelType::GraphCodeBert.model_name(), "graphcodebert");
+    assert_eq!(EmbeddingModelType::BgeBaseEnglish.dimensions(), 768);
+    assert_eq!(EmbeddingModelType::CodeBert.dimensions(), 768);
+    assert_eq!(EmbeddingModelType::GraphCodeBert.dimensions(), 768);
 }

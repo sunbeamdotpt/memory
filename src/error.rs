@@ -41,4 +41,10 @@ impl From<rusqlite::Error> for ServerError {
     }
 }
 
+impl From<cxx::Exception> for ServerError {
+    fn from(err: cxx::Exception) -> Self {
+        ServerError::DatabaseError(err.to_string())
+    }
+}
+
 pub type Result<T> = std::result::Result<T, ServerError>;

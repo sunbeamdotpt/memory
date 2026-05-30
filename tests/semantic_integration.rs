@@ -3,8 +3,9 @@ use mcp_server::embedding::service::{EmbeddingService, EmbeddingModelType};
 
 #[tokio::test]
 async fn test_semantic_store_can_be_created() {
+    let dir = tempfile::tempdir().unwrap();
     let config = SemanticConfig {
-        base_dir: "./tests/data/test_semantic_data".to_string(),
+        base_dir: dir.path().to_str().unwrap().to_string(),
         dimension: 768,
         model_name: "bge-base-en-v1.5".to_string(),
     };
@@ -15,8 +16,9 @@ async fn test_semantic_store_can_be_created() {
 
 #[tokio::test]
 async fn test_semantic_store_can_add_and_search_facts() {
+    let dir = tempfile::tempdir().unwrap();
     let semantic_config = SemanticConfig {
-        base_dir: "./tests/data/test_semantic_search".to_string(),
+        base_dir: dir.path().to_str().unwrap().to_string(),
         dimension: 768,
         model_name: "bge-base-en-v1.5".to_string(),
     };
@@ -62,7 +64,8 @@ async fn test_semantic_search_with_memory_service_integration() {
     use mcp_server::memory::service::MemoryService;
     use mcp_server::config::MemoryConfig;
 
-    let memory_config = MemoryConfig { base_dir: "./tests/data/test_memory_semantic".to_string(), ..Default::default() };
+    let dir = tempfile::tempdir().unwrap();
+    let memory_config = MemoryConfig { base_dir: dir.path().to_str().unwrap().to_string(), ..Default::default() };
 
     let memory_service = MemoryService::new(&memory_config)
         .await

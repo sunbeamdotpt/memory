@@ -2,9 +2,10 @@ use mcp_server::semantic::store::SemanticStore;
 use mcp_server::semantic::SemanticConfig;
 
 #[tokio::test]
-async fn test_hybrid_search_combines_keyword_and_vector() {
+async fn test_fused_search_combines_bm25_and_vector() {
+    let dir = tempfile::tempdir().unwrap();
     let config = SemanticConfig {
-        base_dir: "./tests/data/test_hybrid_data".to_string(),
+        base_dir: dir.path().to_str().unwrap().to_string(),
         dimension: 768,
         model_name: "bge-base-en-v1.5".to_string(),
     };
@@ -24,19 +25,20 @@ async fn test_hybrid_search_combines_keyword_and_vector() {
     store.add_fact("test_namespace", "JavaScript programming language", &embedding3, None).await.unwrap();
     store.add_fact("other_namespace", "Rust programming is great", &embedding1, None).await.unwrap();
 
-    // Query similar to embedding1 (all 1s)
+    // Query similar to embedding1 (all 1s) with keyword "Rust"
     let query_embedding = vec![1.0_f32; 768];
-    let results = store.hybrid_search("Rust", &query_embedding, 2).await.unwrap();
+    let results = store.fused_search("Rust", &query_embedding, 2, None).await.unwrap();
 
     assert_eq!(results.len(), 2);
-    assert!(results[0].content.contains("Rust"));
-    assert!(results[1].content.contains("Rust"));
+    assert!(results[0].0.content.contains("Rust"));
+    assert!(results[1].0.content.contains("Rust"));
 }
 
 #[tokio::test]
-async fn test_hybrid_search_with_no_keyword_matches() {
+async fn test_fused_search_no_bm25_matches() {
+    let dir = tempfile::tempdir().unwrap();
     let config = SemanticConfig {
-        base_dir: "./tests/data/test_hybrid_no_keyword".to_string(),
+        base_dir: dir.path().to_str().unwrap().to_string(),
         dimension: 3,
         model_name: "test".to_string(),
     };
@@ -46,17 +48,18 @@ async fn test_hybrid_search_with_no_keyword_matches() {
     let embedding = vec![1.0_f32, 0.0, 0.0];
     store.add_fact("test", "Content without keyword", &embedding, None).await.unwrap();
 
-    // Keyword has no matches — falls back to vector search, so results are non-empty
+    // Keyword has no BM25 matches — vector search still returns results via RRF
     let query_embedding = vec![1.0_f32, 0.0, 0.0];
-    let results = store.hybrid_search("Nonexistent", &query_embedding, 1).await.unwrap();
+    let results = store.fused_search("Nonexistent", &query_embedding, 1, None).await.unwrap();
 
-    assert!(!results.is_empty(), "Should fall back to vector search when keyword matches nothing");
+    assert!(!results.is_empty(), "Should return vector results when BM25 matches nothing");
 }
 
 #[tokio::test]
-async fn test_hybrid_search_with_no_vector_matches() {
+async fn test_fused_search_no_vector_matches() {
+    let dir = tempfile::tempdir().unwrap();
     let config = SemanticConfig {
-        base_dir: "./tests/data/test_hybrid_no_vector".to_string(),
+        base_dir: dir.path().to_str().unwrap().to_string(),
         dimension: 3,
         model_name: "test".to_string(),
     };
@@ -66,12 +69,12 @@ async fn test_hybrid_search_with_no_vector_matches() {
     let embedding = vec![1.0_f32, 0.0, 0.0];
     store.add_fact("test", "Rust programming", &embedding, None).await.unwrap();
 
-    // Orthogonal query vector — keyword still matches
+    // Orthogonal query vector — BM25 still matches "Rust"
     let query_embedding = vec![0.0_f32, 0.0, 1.0];
-    let results = store.hybrid_search("Rust", &query_embedding, 1).await.unwrap();
+    let results = store.fused_search("Rust", &query_embedding, 1, None).await.unwrap();
 
     assert_eq!(results.len(), 1);
-    assert!(results[0].content.contains("Rust"));
+    assert!(results[0].0.content.contains("Rust"));
 }
 
 #[tokio::test]
@@ -79,16 +82,15 @@ async fn test_logging_in_unauthenticated_mode() {
     use mcp_server::logging::FileLogger;
     use std::fs;
 
-    let log_path = "./test_unauth_log.txt";
-    let _ = fs::remove_file(log_path);
+    let dir = tempfile::tempdir().unwrap();
+    let log_path = dir.path().join("test_unauth_log.txt");
+    let log_path_str = log_path.to_str().unwrap();
 
-    let logger = FileLogger::new(log_path.to_string());
+    let logger = FileLogger::new(log_path_str.to_string());
     logger.log("GET", "/health", "200");
 
-    assert!(fs::metadata(log_path).is_ok());
-    let log_content = fs::read_to_string(log_path).unwrap();
+    assert!(fs::metadata(log_path_str).is_ok());
+    let log_content = fs::read_to_string(log_path_str).unwrap();
     assert!(log_content.contains("GET /health"));
     assert!(log_content.contains("200"));
-
-    fs::remove_file(log_path).ok();
 }
