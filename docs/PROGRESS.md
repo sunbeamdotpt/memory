@@ -101,8 +101,6 @@ mcp-server/
 │   ├── unit/
 │   │   └── config_tests.rs     # Config tests ✅
 │   └── integration/            # Integration tests
-├── config/
-│   └── default.toml           # Default config ✅
 └── MCP_SERVER_PLAN.md         # Project plan ✅
 ```
 
@@ -132,7 +130,7 @@ cargo run
 
 ## What's Working
 
-1. **Configuration**: Loads from `config/default.toml` with environment overrides
+1. **Configuration**: Loaded from environment variables (`MCP_MEMORY_BASE_DIR`, `MCP_AUTH_TOKEN`, `MCP_OIDC_ISSUER`, etc.)
 2. **JWT Auth**: Full token generation and validation with permission checking
 3. **API**: Health check endpoint at `/api/health`
 4. **Error Handling**: Comprehensive error types and conversions

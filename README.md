@@ -2,6 +2,8 @@
 
 A personal semantic memory server for AI assistants. Store facts, code snippets, notes, and documents with vector embeddings — then let your AI search them by meaning, not just keywords.
 
+Also watches directories and auto-ingests files (code, PDFs, text) so your memory stays in sync with your projects.
+
 Works as a local stdio MCP server (zero config, Claude Desktop) or as a remote HTTP server so you can access your memory from any machine.
 
 ---
@@ -41,7 +43,12 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
 }
 ```
 
-The server stores data in `./data/memory` by default. Set `MCP_MEMORY_BASE_DIR` to change it:
+The server stores data in the platform data directory by default:
+- **macOS:** `~/Library/Application Support/sunbeam/memory`
+- **Linux:** `~/.local/share/sunbeam/memory`
+- **Windows:** `%APPDATA%/sunbeam/memory`
+
+Set `MCP_MEMORY_BASE_DIR` to change it:
 
 ```json
 {
@@ -127,16 +134,19 @@ OIDC takes priority over `MCP_AUTH_TOKEN` if both are set.
 
 | Variable | Default | Description |
 |---|---|---|
-| `MCP_MEMORY_BASE_DIR` | `./data/memory` | Where the SQLite database and model cache are stored |
+| `MCP_MEMORY_BASE_DIR` | platform data dir | Where the SQLite database and model cache are stored |
 | `MCP_AUTH_TOKEN` | _(unset)_ | Simple bearer token for remote hosting. Unset = localhost-only |
 | `MCP_OIDC_ISSUER` | _(unset)_ | OIDC issuer URL. When set, validates JWT bearer tokens via JWKS |
 | `MCP_OIDC_AUDIENCE` | _(unset)_ | Expected `aud` claim. Leave unset to skip audience validation |
+| `MCP_SESSION_TTL_HOURS` | `24` | How long HTTP sessions stay alive |
 
 ---
 
 ## Tools
 
-### `store_fact`
+### Memory tools
+
+#### `store_fact`
 Embed and store a piece of text. Returns the fact ID.
 
 ```
@@ -145,7 +155,7 @@ namespace  (optional) Logical group — e.g. "code", "notes", "docs". Default: "
 source     (optional) smem URN identifying where this came from (see below)
 ```
 
-### `search_facts`
+#### `search_facts`
 Semantic search — finds content by meaning, not exact words.
 
 ```
@@ -154,7 +164,7 @@ limit      (optional) Max results. Default: 10
 namespace  (optional) Restrict search to one namespace
 ```
 
-### `update_fact`
+#### `update_fact`
 Update an existing fact in place. Keeps the same ID, re-embeds the new content.
 
 ```
@@ -163,14 +173,14 @@ content    (required) New text content
 source     (optional) New smem URN
 ```
 
-### `delete_fact`
+#### `delete_fact`
 Delete a fact by ID.
 
 ```
 id         (required) Fact ID
 ```
 
-### `list_facts`
+#### `list_facts`
 List facts in a namespace, newest first. Supports date filtering.
 
 ```
@@ -180,7 +190,58 @@ from       (optional) Only show facts stored on or after this time (RFC 3339 or 
 to         (optional) Only show facts stored on or before this time
 ```
 
-### `build_source_urn`
+### Indexer tools (file watching & ingestion)
+
+Point the server at directories, git repos, or individual files and it will automatically ingest them into searchable memory. PDFs are extracted page-by-page. Binary files are skipped. Git state is tracked so edits on the same branch update facts in place, while new branches create new facts.
+
+#### `add_watch_target`
+Start watching a path. Supports globs (`*` `?` `[...]`).
+
+```
+path       (required) Directory, file, or glob pattern to watch
+namespace  (optional) Namespace for ingested facts. Default: "default"
+type       (optional) "dir" | "file" | "glob". Default: inferred from path
+```
+
+Examples:
+- `add_watch_target` with `path: "/home/me/project/src"`
+- `add_watch_target` with `path: "/home/me/docs/**/*.pdf"`, `namespace: "docs"`
+- `add_watch_target` with `path: "/home/me/notes/*.{md,txt}"`, `namespace: "notes"`
+
+#### `remove_watch_target`
+Stop watching a target by ID.
+
+```
+target_id  (required) ID returned by add_watch_target
+```
+
+#### `list_watch_targets`
+List all active watch targets. No inputs.
+
+#### `sync_watch_target`
+Force a full re-scan of a target right now.
+
+```
+target_id  (required) ID of the target to sync
+```
+
+#### `get_index_progress`
+Check ingestion progress for a target: files pending, completed, failed, and current file.
+
+```
+target_id  (required) ID of the target
+```
+
+#### `restore_stale_fact`
+Un-mark a fact as stale (e.g. after a file was temporarily deleted).
+
+```
+source_urn  (required) The source URN of the fact to restore
+```
+
+### URN tools
+
+#### `build_source_urn`
 Build a valid smem URN from components. Use this before passing `source` to `store_fact`.
 
 ```
@@ -190,15 +251,32 @@ locator       (required) Origin-specific path (see describe_urn_schema)
 fragment      (optional) Line reference: L42 or L10-L30
 ```
 
-### `parse_source_urn`
+#### `parse_source_urn`
 Parse and validate a smem URN. Returns structured components or an error.
 
 ```
 urn  (required) The URN to parse, e.g. urn:smem:code:fs:/path/to/file.rs#L10
 ```
 
-### `describe_urn_schema`
+#### `describe_urn_schema`
 Returns the full smem URN taxonomy: content types, origins, locator shapes, and examples. No inputs.
+
+### Observability tools
+
+#### `get_recent_errors`
+List recent ingestion or system errors so you can be informed of failures.
+
+```
+component  (optional) Filter to a specific component (e.g. "indexer", "extractor")
+limit      (optional) Max errors to return. Default: 50
+```
+
+#### `resolve_error`
+Mark a logged error as resolved so it no longer appears in `get_recent_errors`.
+
+```
+error_id   (required) ID of the error to resolve
+```
 
 ---
 
@@ -229,7 +307,7 @@ Use `build_source_urn` to construct one without memorising the format. Use `desc
 
 ## Data
 
-Facts are stored in a SQLite database in `MCP_MEMORY_BASE_DIR` (default `./data/memory/semantic.db`). The embedding model is cached by fastembed on first run.
+Facts are stored in a SQLite database (`semantic.db`) in `MCP_MEMORY_BASE_DIR`. The embedding model is cached by fastembed on first run.
 
 To back up your memory: copy the `semantic.db` file. It's self-contained.
 
@@ -246,8 +324,12 @@ Claude / MCP client
       │
  memory/service.rs    ← embed content, business logic
       │
- semantic/store.rs    ← cosine similarity index (in-memory)
- semantic/db.rs       ← SQLite persistence (facts + embeddings)
+ semantic/store.rs    ← cosine similarity index (usearch)
+ semantic/db.rs       ← SQLite persistence (facts + embeddings + errors)
+      │
+ indexer/             ← file watcher, PDF extractor, scanner
 ```
 
-Embeddings: BGE-Base-English-v1.5 via [fastembed](https://github.com/Anush008/fastembed-rs), 768 dimensions, ~130 MB model download on first run.
+**Embeddings:** BGE-Base-English-v1.5 via [fastembed](https://github.com/Anush008/fastembed-rs), 768 dimensions, ~130 MB model download on first run.
+
+**Vector search:** [usearch](https://github.com/unum-cloud/usearch) (in-memory, cosine similarity).
