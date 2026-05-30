@@ -7,3 +7,5 @@ pub mod logging;
 pub mod mcp;
 pub mod urn;
 pub mod api;
+pub mod paths;
+pub mod indexer;

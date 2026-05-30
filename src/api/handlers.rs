@@ -7,13 +7,15 @@ use crate::api::types::{
 use crate::memory::service::MemoryService;
 use crate::mcp::server::parse_ts;
 
+const MAX_LIMIT: usize = 1000;
+
 fn fact_to_response(fact: crate::memory::service::MemoryFact, score: Option<f32>) -> FactResponse {
     FactResponse {
         id: fact.id,
         namespace: fact.namespace,
         content: fact.content,
         created_at: fact.created_at,
-        score: score.or(if fact.score != 0.0 { Some(fact.score) } else { None }),
+        score: score.or(Some(fact.score)),
         source: fact.source,
     }
 }
@@ -45,7 +47,11 @@ pub async fn search_facts(
         return HttpResponse::BadRequest()
             .json(ErrorResponse { error: "`q` must not be empty".to_string() });
     }
-    let limit = params.limit.unwrap_or(10);
+    let limit = params.limit.unwrap_or(10).min(MAX_LIMIT);
+    if limit == 0 {
+        return HttpResponse::BadRequest()
+            .json(ErrorResponse { error: "limit must be >= 1".to_string() });
+    }
     match memory.search_facts(&params.q, limit, params.namespace.as_deref()).await {
         Ok(results) => {
             let total = results.len();
@@ -64,7 +70,11 @@ pub async fn list_facts(
     namespace: web::Path<String>,
     params: web::Query<ListParams>,
 ) -> HttpResponse {
-    let limit = params.limit.unwrap_or(50);
+    let limit = params.limit.unwrap_or(50).min(MAX_LIMIT);
+    if limit == 0 {
+        return HttpResponse::BadRequest()
+            .json(ErrorResponse { error: "limit must be >= 1".to_string() });
+    }
     let from_ts = params.from.as_deref().and_then(parse_ts);
     let to_ts = params.to.as_deref().and_then(parse_ts);
     match memory.list_facts(&namespace, limit, from_ts, to_ts).await {
