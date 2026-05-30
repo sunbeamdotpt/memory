@@ -1,0 +1,20 @@
+schema: 1
+project:
+  name: mcp-server
+  kind: rust-bin
+  description: "Model Context Protocol server with semantic memory and OIDC auth."
+targets:
+  build:
+    exec: "cargo build --release"
+  test:
+    exec: [cargo, nextest, run]
+  lint:
+    exec: "cargo clippy -- -D warnings"
+  fmt:
+    exec: "cargo fmt"
+  clean:
+    exec: "cargo clean"
+  doc:
+    exec: "cargo doc --no-deps"
+outputs:
+  - target/release/mcp-server
