@@ -2,6 +2,7 @@
 //
 // Fetches the provider's JWKS at startup via the OpenID Connect discovery document
 // and validates RS256/ES256/PS256 bearer tokens on every request.
+// Refreshes JWKS automatically on kid miss or TTL expiry.
 //
 // Environment variables:
 //   MCP_OIDC_ISSUER   — issuer URL, e.g. https://auth.example.com
@@ -13,6 +14,7 @@ use jsonwebtoken::{
     Algorithm, DecodingKey, Validation,
 };
 use serde_json::Value;
+use std::time::{Duration, Instant};
 
 #[derive(Debug)]
 pub enum OidcError {
@@ -35,14 +37,40 @@ pub struct OidcVerifier {
     issuer: String,
     audience: Option<String>,
     jwks: JwkSet,
+    _jwks_uri: String,
+    last_fetched: Instant,
+    ttl: Duration,
 }
 
 impl OidcVerifier {
     /// Fetch discovery doc and JWKS from the issuer. Called once at startup.
     pub async fn new(issuer: &str, audience: Option<String>) -> Result<Self, OidcError> {
+        let (jwks, jwks_uri) = Self::fetch_jwks(issuer).await?;
+        Ok(Self {
+            issuer: issuer.to_string(),
+            audience,
+            jwks,
+            _jwks_uri: jwks_uri,
+            last_fetched: Instant::now(),
+            ttl: Duration::from_secs(3600),
+        })
+    }
+
+    #[doc(hidden)]
+    pub fn test_new(issuer: &str, audience: Option<String>, jwks: JwkSet) -> Self {
+        Self {
+            issuer: issuer.to_string(),
+            audience,
+            jwks,
+            _jwks_uri: String::new(),
+            last_fetched: Instant::now(),
+            ttl: Duration::from_secs(3600),
+        }
+    }
+
+    async fn fetch_jwks(issuer: &str) -> Result<(JwkSet, String), OidcError> {
         let client = reqwest::Client::new();
 
-        // 1. Discovery document
         let disc_url = format!(
             "{}/.well-known/openid-configuration",
             issuer.trim_end_matches('/')
@@ -60,11 +88,11 @@ impl OidcVerifier {
 
         let jwks_uri = disc["jwks_uri"]
             .as_str()
-            .ok_or_else(|| OidcError::Discovery("discovery doc missing jwks_uri".to_string()))?;
+            .ok_or_else(|| OidcError::Discovery("discovery doc missing jwks_uri".to_string()))?
+            .to_string();
 
-        // 2. JWKS
         let jwks: JwkSet = client
-            .get(jwks_uri)
+            .get(&jwks_uri)
             .send()
             .await
             .map_err(|e| OidcError::Jwks(e.to_string()))?
@@ -74,27 +102,33 @@ impl OidcVerifier {
             .await
             .map_err(|e| OidcError::Jwks(e.to_string()))?;
 
-        Ok(Self {
-            issuer: issuer.to_string(),
-            audience,
-            jwks,
-        })
+        Ok((jwks, jwks_uri))
     }
 
     /// Verify a raw Bearer token string. Returns `Ok(())` if valid.
-    pub fn verify(&self, token: &str) -> Result<(), OidcError> {
-        // Decode header to get kid + algorithm
+    pub fn verify(&mut self, token: &str) -> Result<(), OidcError> {
         let header = decode_header(token).map_err(|e| OidcError::Token(e.to_string()))?;
-
         let kid = header.kid.as_deref().unwrap_or("");
 
-        // Find the matching JWK
-        let jwk = self
-            .jwks
-            .find(kid)
-            .ok_or_else(|| OidcError::Token(format!("no JWK found for kid={kid:?}")))?;
+        let jwk = self.jwks.find(kid);
+        let jwk = match jwk {
+            Some(j) => j,
+            None => {
+                // Try refreshing JWKS if kid not found or TTL expired
+                if self.last_fetched.elapsed() > self.ttl {
+                    let rt = tokio::runtime::Handle::try_current()
+                        .map_err(|e| OidcError::Jwks(e.to_string()))?;
+                    let (new_jwks, _) = rt.block_on(Self::fetch_jwks(&self.issuer))?;
+                    self.jwks = new_jwks;
+                    self.last_fetched = Instant::now();
+                    self.jwks.find(kid)
+                        .ok_or_else(|| OidcError::Token(format!("no JWK found for kid={kid:?} after refresh")))?
+                } else {
+                    return Err(OidcError::Token(format!("no JWK found for kid={kid:?}")));
+                }
+            }
+        };
 
-        // Build the decoding key from the JWK
         let key = match &jwk.algorithm {
             AlgorithmParameters::RSA(rsa) => {
                 DecodingKey::from_rsa_components(&rsa.n, &rsa.e)
@@ -111,9 +145,7 @@ impl OidcVerifier {
             }
         };
 
-        // Determine algorithm from header (fall back to RS256)
         let alg = header.alg;
-        // Only allow standard OIDC signing algorithms
         match alg {
             Algorithm::RS256
             | Algorithm::RS384
