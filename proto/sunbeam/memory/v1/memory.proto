@@ -1,0 +1,464 @@
+syntax = "proto3";
+
+package sunbeam.memory.v1;
+
+// MemoryService
+//
+// Programmatic API for sunbeam-memory. Exposes the same operations as the
+// MCP tool layer, but over Connect-RPC (protobuf + JSON over HTTP).
+//
+// Use this for scripts, services, and integrations that don't speak MCP.
+// The MCP layer (stdio or Streamable HTTP at /mcp) is the canonical interface
+// for AI assistants; this service is for everything else.
+service MemoryService {
+  // ── Facts: semantic memory CRUD ────────────────────────────────────────────
+
+  // Embed and store a piece of text. Returns the created fact with its ID
+  // and timestamp. Content is required and must be non-empty.
+  rpc StoreFact(StoreFactRequest) returns (StoreFactResponse) {}
+
+  // Semantic search — finds content by meaning, not exact keyword match.
+  // Results are ranked by RRF (Reciprocal Rank Fusion) score combining
+  // BM25 keyword relevance and cosine vector similarity. Higher score = better.
+  rpc SearchFacts(SearchFactsRequest) returns (SearchFactsResponse) {}
+
+  // Update an existing fact in place. Keeps the same ID, re-embeds the new
+  // content, and replaces the vector in the index. Returns 404 if the ID
+  // does not exist.
+  rpc UpdateFact(UpdateFactRequest) returns (UpdateFactResponse) {}
+
+  // Delete a fact by ID. Returns `deleted: true` if it existed,
+  // `deleted: false` if it was already gone.
+  rpc DeleteFact(DeleteFactRequest) returns (DeleteFactResponse) {}
+
+  // List facts in a namespace, most recent first. Supports optional date
+  // range filtering with `from` and `to` (RFC 3339 strings or Unix timestamps).
+  rpc ListFacts(ListFactsRequest) returns (ListFactsResponse) {}
+
+  // ── Indexer: file watching & auto-ingestion ────────────────────────────────
+
+  // Start watching a filesystem path. The indexer scans it immediately and
+  // re-ingests when files change. Supports directories, individual files,
+  // and glob patterns. Returns one or more target IDs.
+  rpc AddWatchTarget(AddWatchTargetRequest) returns (AddWatchTargetResponse) {}
+
+  // Stop watching a target by its ID.
+  rpc RemoveWatchTarget(RemoveWatchTargetRequest) returns (RemoveWatchTargetResponse) {}
+
+  // List all active watch targets with their current git state (branch and
+  // commit when applicable).
+  rpc ListWatchTargets(ListWatchTargetsRequest) returns (ListWatchTargetsResponse) {}
+
+  // Force an immediate full rescan and re-ingestion of a watch target.
+  // This is asynchronous — check progress with GetIndexProgress.
+  rpc SyncWatchTarget(SyncWatchTargetRequest) returns (SyncWatchTargetResponse) {}
+
+  // Get detailed indexing progress for a specific target: pending, processing,
+  // completed, and failed file counts, plus the current file being processed.
+  rpc GetIndexProgress(GetIndexProgressRequest) returns (GetIndexProgressResponse) {}
+
+  // Restore a stale (soft-deleted) fact so it appears in search again.
+  // Facts become stale when their source file is deleted; this unmarks them.
+  rpc RestoreStaleFact(RestoreStaleFactRequest) returns (RestoreStaleFactResponse) {}
+
+  // ── Source URNs: provenance tracking ───────────────────────────────────────
+
+  // Build a valid smem URN from its components. Use this before passing a
+  // `source` to StoreFact to ensure the URN is well-formed.
+  rpc BuildSourceUrn(BuildSourceUrnRequest) returns (BuildSourceUrnResponse) {}
+
+  // Parse and validate a smem URN. Returns structured components when valid,
+  // or an error description when invalid.
+  rpc ParseSourceUrn(ParseSourceUrnRequest) returns (ParseSourceUrnResponse) {}
+
+  // Return the full machine-readable smem URN taxonomy as JSON:
+  // content types, origins, locator shapes, validation rules, and examples.
+  rpc DescribeUrnSchema(DescribeUrnSchemaRequest) returns (DescribeUrnSchemaResponse) {}
+
+  // ── Observability: error logging ───────────────────────────────────────────
+
+  // Retrieve recent system errors logged by the indexer, API, or other
+  // components. Use this to diagnose ingestion or search failures.
+  rpc GetRecentErrors(GetRecentErrorsRequest) returns (GetRecentErrorsResponse) {}
+
+  // Mark a logged error as resolved so it no longer appears in GetRecentErrors.
+  rpc ResolveError(ResolveErrorRequest) returns (ResolveErrorResponse) {}
+
+  // ── Health ─────────────────────────────────────────────────────────────────
+
+  // Liveness/readiness check. Returns the server version and status.
+  rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse) {}
+}
+
+// ============================================================================
+// Common types
+// ============================================================================
+
+// A stored fact with vector embedding. Facts are persisted in SQLite and
+// indexed for semantic search.
+message Fact {
+  // Unique ULID assigned at creation time.
+  string id = 1;
+
+  // Logical grouping — e.g. "code", "docs", "notes", "default".
+  string namespace = 2;
+
+  // The text content that was stored and embedded.
+  string content = 3;
+
+  // RFC 3339 timestamp of when the fact was created.
+  string created_at = 4;
+
+  // RRF score when this fact came from SearchFacts; 0.0 for StoreFact
+  // and other non-search contexts.
+  float score = 5;
+
+  // Optional smem URN identifying where this content came from
+  // (e.g. a source file or git commit).
+  optional string source = 6;
+}
+
+// A filesystem or git repository that the indexer is watching.
+message WatchTarget {
+  // Target ID assigned when the watch was created.
+  string id = 1;
+
+  // Absolute filesystem path being watched.
+  string path = 2;
+
+  // Type of target: "file", "directory", or "git_repo".
+  string target_type = 3;
+
+  // Namespace for facts ingested from this target.
+  string namespace = 4;
+
+  // False if the watch has been disabled (not removed).
+  bool enabled = 5;
+
+  // Git branch at the time of the last scan. Only set for git_repo targets.
+  optional string last_scan_git_branch = 6;
+
+  // Git commit SHA at the time of the last scan. Only set for git_repo targets.
+  optional string last_scan_git_commit = 7;
+}
+
+// Ingestion progress snapshot for a specific watch target.
+message IndexProgress {
+  // Total number of files discovered in the target.
+  uint64 files_total = 1;
+
+  // Files queued but not yet started.
+  uint64 files_pending = 2;
+
+  // Files currently being processed.
+  uint64 files_processing = 3;
+
+  // Files successfully ingested.
+  uint64 files_completed = 4;
+
+  // Files that failed ingestion (e.g. binary, unreadable, extraction error).
+  uint64 files_failed = 5;
+
+  // Path of the file currently being processed, if any.
+  optional string current_file = 6;
+
+  // Description of the most recent failure, if any.
+  optional string last_error = 7;
+}
+
+// A single logged error entry.
+message ErrorEntry {
+  // Unique error ID (ULID).
+  string error_id = 1;
+
+  // Unix epoch seconds when the error occurred.
+  int64 timestamp = 2;
+
+  // Component that logged the error: indexer, api, mcp, watcher, extractor.
+  string component = 3;
+
+  // Severity: error, warn, or info.
+  string severity = 4;
+
+  // Human-readable error message.
+  string message = 5;
+
+  // Optional stack trace or additional diagnostic details.
+  optional string details = 6;
+}
+
+// ============================================================================
+// Facts
+// ============================================================================
+
+message StoreFactRequest {
+  // Text to store and embed. Required; must be non-empty.
+  string content = 1;
+
+  // Logical group for the fact. Defaults to "default" when empty.
+  string namespace = 2;
+
+  // Optional smem URN identifying where this content came from.
+  // Use BuildSourceUrn first to construct a valid URN.
+  optional string source = 3;
+}
+
+message StoreFactResponse {
+  // The created fact with its generated ID and timestamp.
+  Fact fact = 1;
+}
+
+message SearchFactsRequest {
+  // Natural language query. Required; must be non-empty.
+  string query = 1;
+
+  // Maximum number of results to return. Defaults to 10.
+  uint64 limit = 2;
+
+  // If set, restrict search to this namespace only.
+  optional string namespace = 3;
+}
+
+message SearchFactsResponse {
+  // Ranked results, highest RRF score first.
+  repeated Fact results = 1;
+
+  // Number of results returned (may be less than `limit` if no more matches).
+  uint64 total = 2;
+}
+
+message UpdateFactRequest {
+  // ID of the fact to update. Must match an existing fact.
+  string id = 1;
+
+  // New text content. Required; must be non-empty.
+  string content = 2;
+
+  // Optional new smem URN. Omit to keep the existing source.
+  optional string source = 3;
+}
+
+message UpdateFactResponse {
+  // The updated fact with the new content and preserved ID.
+  Fact fact = 1;
+}
+
+message DeleteFactRequest {
+  // ID of the fact to delete.
+  string id = 1;
+}
+
+message DeleteFactResponse {
+  // True if the fact existed and was deleted; false if it was already absent.
+  bool deleted = 1;
+}
+
+message ListFactsRequest {
+  // Namespace to list. Defaults to "default" when empty.
+  string namespace = 1;
+
+  // Maximum facts to return. Defaults to 50.
+  uint64 limit = 2;
+
+  // Only include facts stored on or after this time.
+  // Accepts RFC 3339 (e.g. "2024-01-01T00:00:00Z") or raw Unix timestamp.
+  optional string from = 3;
+
+  // Only include facts stored on or before this time.
+  // Same format as `from`.
+  optional string to = 4;
+}
+
+message ListFactsResponse {
+  // Facts in the namespace, newest first.
+  repeated Fact facts = 1;
+
+  // Number of facts returned.
+  uint64 total = 2;
+}
+
+// ============================================================================
+// Indexer
+// ============================================================================
+
+message AddWatchTargetRequest {
+  // Absolute filesystem path to watch. Can be a directory, file, or glob
+  // pattern (e.g. "/home/me/docs/**/*.pdf").
+  string path = 1;
+
+  // Namespace for facts ingested from this target. Defaults to "default".
+  string namespace = 2;
+
+  // Explicit target type. When omitted, the server infers from the path:
+  // - Ends with `*` or contains `**` → glob
+  // - Existing directory → directory
+  // - Existing file → file
+  // - Contains `.git` → git_repo
+  optional string target_type = 3;
+}
+
+message AddWatchTargetResponse {
+  // One or more target IDs created. Glob patterns may expand to multiple
+  // concrete targets, each with its own ID.
+  repeated string target_ids = 1;
+
+  // Number of targets created.
+  uint64 count = 2;
+}
+
+message RemoveWatchTargetRequest {
+  // Target ID as returned by AddWatchTarget.
+  string target_id = 1;
+}
+
+message RemoveWatchTargetResponse {
+  // True if the target existed and was removed; false if already gone.
+  bool removed = 1;
+}
+
+message ListWatchTargetsRequest {}
+
+message ListWatchTargetsResponse {
+  // All active watch targets.
+  repeated WatchTarget targets = 1;
+
+  // Number of targets.
+  uint64 total = 2;
+}
+
+message SyncWatchTargetRequest {
+  // Target ID to force-resync.
+  string target_id = 1;
+}
+
+message SyncWatchTargetResponse {
+  // True if the sync was started. The sync runs asynchronously;
+  // poll GetIndexProgress to monitor completion.
+  bool started = 1;
+}
+
+message GetIndexProgressRequest {
+  // Target ID to query.
+  string target_id = 1;
+}
+
+message GetIndexProgressResponse {
+  // Progress snapshot, or absent if the target has no active indexing job.
+  optional IndexProgress progress = 1;
+}
+
+message RestoreStaleFactRequest {
+  // Fact ID to restore.
+  string id = 1;
+}
+
+message RestoreStaleFactResponse {
+  // True if the fact was found and restored; false if not found.
+  bool restored = 1;
+}
+
+// ============================================================================
+// Source URNs
+// ============================================================================
+
+message BuildSourceUrnRequest {
+  // Content type. Must be one of: code, doc, web, data, note, conf.
+  string content_type = 1;
+
+  // Origin. Must be one of: git, fs, https, http, db, api, manual.
+  string origin = 2;
+
+  // Origin-specific locator (path, URL, DB identifier, etc.).
+  string locator = 3;
+
+  // Optional fragment: line reference (L42, L10-L30) or slug anchor.
+  optional string fragment = 4;
+}
+
+message BuildSourceUrnResponse {
+  // The constructed URN string, e.g.
+  // "urn:smem:code:fs:/home/user/project/main.rs#L10-L30".
+  string urn = 1;
+}
+
+message ParseSourceUrnRequest {
+  // The URN string to parse and validate.
+  string urn = 1;
+}
+
+message ParseSourceUrnResponse {
+  // True if the URN is syntactically valid.
+  bool valid = 1;
+
+  // Extracted content type, when valid.
+  optional string content_type = 2;
+
+  // Extracted origin, when valid.
+  optional string origin = 3;
+
+  // Extracted locator, when valid.
+  optional string locator = 4;
+
+  // Extracted fragment, when present and valid.
+  optional string fragment = 5;
+
+  // Human-readable description, when valid.
+  optional string human_readable = 6;
+
+  // Error description, when invalid.
+  optional string error = 7;
+}
+
+message DescribeUrnSchemaRequest {}
+
+message DescribeUrnSchemaResponse {
+  // Full machine-readable taxonomy as a JSON string.
+  // Contains content types, origins, locator shapes, validation rules,
+  // and examples. Use this to build URN construction UIs.
+  string schema_json = 1;
+}
+
+// ============================================================================
+// Observability
+// ============================================================================
+
+message GetRecentErrorsRequest {
+  // Filter to a specific component. Omit to see all components.
+  // Valid values: indexer, api, mcp, watcher, extractor.
+  optional string component = 1;
+
+  // Maximum errors to return. Defaults to 10.
+  uint64 limit = 2;
+}
+
+message GetRecentErrorsResponse {
+  // Errors ordered newest first.
+  repeated ErrorEntry errors = 1;
+
+  // Number of errors returned.
+  uint64 total = 2;
+}
+
+message ResolveErrorRequest {
+  // Error ID to mark as resolved.
+  string error_id = 1;
+}
+
+message ResolveErrorResponse {
+  // True if the error existed and was resolved; false if not found.
+  bool resolved = 1;
+}
+
+// ============================================================================
+// Health
+// ============================================================================
+
+message HealthCheckRequest {}
+
+message HealthCheckResponse {
+  // "healthy" when the server is ready to accept requests.
+  string status = 1;
+
+  // Server version, e.g. "0.2.0".
+  string version = 2;
+}
