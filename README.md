@@ -6,7 +6,7 @@ Also watches directories and auto-ingests files (code, PDFs, text) so your memor
 
 Works as a local stdio MCP server (zero config, Claude Desktop) or as a remote HTTP server so you can access your memory from any machine.
 
-Built on the official [`rmcp`](https://github.com/modelcontextprotocol/rust-sdk) Rust SDK for native MCP protocol support.
+Built on the official [`rmcp`](https://github.com/modelcontextprotocol/rust-sdk) Rust SDK for native MCP protocol support. Also exposes a ConnectRPC (protobuf over HTTP/2) API for programmatic access from scripts and services.
 
 ---
 
@@ -196,18 +196,19 @@ to         (optional) Only show facts stored on or before this time
 Point the server at directories, git repos, or individual files and it will automatically ingest them into searchable memory. PDFs are extracted page-by-page. Binary files are skipped. Git state is tracked so edits on the same branch update facts in place, while new branches create new facts.
 
 #### `add_watch_target`
-Start watching a path. Supports globs (`*` `?` `[...]`).
+Start watching a path. Supports globs (`*` `?` `[...]`). Respects `.gitignore` when scanning git repositories.
 
 ```
 path       (required) Directory, file, or glob pattern to watch
 namespace  (optional) Namespace for ingested facts. Default: "default"
-type       (optional) "dir" | "file" | "glob". Default: inferred from path
+type       (optional) "file" | "directory" | "git_repo". Default: inferred from path
 ```
 
 Examples:
 - `add_watch_target` with `path: "/home/me/project/src"`
 - `add_watch_target` with `path: "/home/me/docs/**/*.pdf"`, `namespace: "docs"`
 - `add_watch_target` with `path: "/home/me/notes/*.{md,txt}"`, `namespace: "notes"`
+- `add_watch_target` with `path: "/home/me/project"`, `type: "git_repo"`, `namespace: "project"`
 
 #### `remove_watch_target`
 Stop watching a target by ID.
@@ -296,7 +297,7 @@ urn:smem:<type>:<origin>:<locator>[#<fragment>]
 | Origin | Locator | Example |
 |--------|---------|---------|
 | `fs` | `[hostname:]<absolute-path>` | `urn:smem:code:fs:/home/me/project/main.rs#L10-L30` |
-| `git` | `<host>/<org>/<repo>/<ref>/<path>` | `urn:smem:code:git:github.com/org/repo/main/src/lib.rs` |
+| `git` | `<host>:<org>:<repo>:<branch>:<path>` | `urn:smem:code:git:github.com:org:repo:main:src/lib.rs` |
 | `https` | `<host>/<path>` | `urn:smem:doc:https:docs.example.com/guide` |
 | `db` | `<driver>/<host>/<db>/<table>/<pk>` | `urn:smem:data:db:postgres/localhost/app/users/42` |
 | `api` | `<host>/<path>` | `urn:smem:data:api:api.example.com/v1/items/99` |
@@ -317,23 +318,29 @@ To back up your memory: copy the `semantic.db` file. It's self-contained.
 ## Architecture
 
 ```
-Claude / MCP client
-      │
-      │  stdio (local)  or  Streamable HTTP /mcp  (remote)
-      ▼
- rmcp transport       ← official Rust MCP SDK handles protocol framing
-      │
- mcp/server.rs        ← SunbeamServer: tool router + business logic
-      │
- memory/service.rs    ← embed content, business logic
-      │
- semantic/store.rs    ← HNSW vector search (usearch)
- semantic/db.rs       ← SQLite persistence (facts + FTS5 + errors)
-      │
- indexer/             ← file watcher, PDF extractor, git scanner
+┌─────────────────┐     ┌─────────────────┐
+│  MCP client     │     │  gRPC/HTTP      │
+│  (stdio / HTTP) │     │  client         │
+└────────┬────────┘     └────────┬────────┘
+         │                       │
+         ▼                       ▼
+  mcp/server.rs           connect/service.rs
+  (rmcp tools)            (ConnectRPC proto)
+         │                       │
+         └───────────┬───────────┘
+                     ▼
+              core/service.rs    ← validation, orchestration
+                     │
+              memory/service.rs  ← embed, search, CRUD
+                     │
+         ┌───────────┴───────────┐
+         ▼                       ▼
+  semantic/store.rs        indexer/
+  (HNSW + SQLite)          (watcher, scanner, PDF)
 ```
 
-**Protocol:** [MCP 2025-06-18](https://spec.modelcontextprotocol.io/specification/2025-06-18/) via [rmcp](https://github.com/modelcontextprotocol/rust-sdk) (stdio + Streamable HTTP).
+**MCP Protocol:** [MCP 2025-06-18](https://spec.modelcontextprotocol.io/specification/2025-06-18/) via [rmcp](https://github.com/modelcontextprotocol/rust-sdk) (stdio + Streamable HTTP).  
+**Programmatic API:** ConnectRPC (`sunbeam.memory.v1.MemoryService`) via protobuf + HTTP/2.
 
 **Embeddings:** BGE-Base-English-v1.5 via [fastembed](https://github.com/Anush008/fastembed-rs), 768 dimensions, ~130 MB model download on first run.
 

@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] — 2026-06-04
+
+### Added
+
+- **`CoreService`** — protocol-agnostic orchestration layer that sits between transport adapters and persistence. All validation and business logic lives here; MCP and ConnectRPC adapters are thin wrappers.
+- **ConnectRPC adapter** (`src/connect/`) — full programmatic API over protobuf + HTTP/2, generated from `proto/sunbeam/memory/v1/memory.proto` via `connectrpc-build`. Implements 16 RPCs covering facts, indexer, URNs, observability, and health.
+- **`ignore`-based directory scanning** — the indexer now respects `.gitignore`, global gitignore, and `.git/info/exclude` when scanning targets. Previously it indexed build artifacts and git internals.
+- **`.git/` exclusion** — scanner explicitly skips git internal directories (object database, hooks, logs, etc.) to avoid binary ingestion failures.
+- Regression test for indexer progress tracking (`test_sync_progress_processing_counter_resets`).
+
+### Changed
+
+- **Crate rename:** Library root and all imports changed from `mcp_server` to `sunbeam_memory`. This is a breaking change for any downstream crates.
+- **Architecture refactor:** `SunbeamServer` now delegates to `CoreService` instead of owning business logic directly. `MemoryConnectService` implements the generated `MemoryService` trait by delegating to the same core.
+- **Module normalization:** `src/semantic.rs` moved to `src/semantic/mod.rs` for consistent module layout.
+- **Dependencies:** added `connectrpc`, `buffa`, `buffa-types`, `axum`, `tower`, `sunbeam-g2v`, `ignore`; removed unused `walkdir` (superseded by `ignore`).
+- **Edition:** bumped from `2021` to `2024`.
+
+### Removed
+
+- `src/api/handlers.rs`, `src/api/mcp_http.rs`, `src/api/oidc.rs` — superseded by rmcp's Streamable HTTP and the new ConnectRPC adapter.
+- `src/semantic/search.rs` — orphaned module with no callers after the search logic moved into `MemoryService`.
+- `tests/oidc_tests.rs` — removed alongside the old OIDC middleware; JWT validation now lives in `src/api/oidc.rs` but is only used by the REST layer.
+- `git::build_source_urn` — replaced by `SourceUrn::build_git_urn` on the `Urn` type.
+- Old backup test files (`tests/semantic_db_errors_backup.rs`, `tests/api_endpoints_backup.rs`).
+
 ## [0.2.0] — 2026-06-04
 
 ### Added
