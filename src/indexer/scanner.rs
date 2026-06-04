@@ -2,7 +2,7 @@ use crate::error::Result;
 use std::path::{Path, PathBuf};
 
 /// Scan a directory (or single file) and return all file paths to ingest.
-/// Respects `.git` directory skipping. Does not yet respect `.gitignore`.
+/// Respects `.gitignore` files when scanning inside git repositories.
 pub fn scan_target(path: &Path) -> Result<Vec<PathBuf>> {
     if path.is_file() {
         return Ok(vec![path.to_path_buf()]);
@@ -10,26 +10,31 @@ pub fn scan_target(path: &Path) -> Result<Vec<PathBuf>> {
 
     let mut files = Vec::new();
 
-    for entry in walkdir::WalkDir::new(path)
+    for result in ignore::WalkBuilder::new(path)
+        .hidden(false)           // we want hidden files unless gitignore excludes them
+        .git_ignore(true)        // respect .gitignore
+        .git_global(true)        // respect global gitignore
+        .git_exclude(true)       // respect .git/info/exclude
         .follow_links(false)
-        .into_iter()
-        .filter_entry(|e| !is_hidden_or_git(e))
+        .build()
     {
-        let entry = match entry {
+        let entry = match result {
             Ok(e) => e,
             Err(_) => continue,
         };
-        if entry.file_type().is_file() {
+        // Skip .git directories — ignore::WalkBuilder respects .gitignore
+        // but does not automatically exclude .git/ internals.
+        if entry.path().components().any(|c| {
+            c.as_os_str() == ".git"
+        }) {
+            continue;
+        }
+        if entry.file_type().map(|t| t.is_file()).unwrap_or(false) {
             files.push(entry.path().to_path_buf());
         }
     }
 
     Ok(files)
-}
-
-fn is_hidden_or_git(entry: &walkdir::DirEntry) -> bool {
-    let name = entry.file_name().to_string_lossy();
-    name.starts_with('.') || name == ".git"
 }
 
 /// Check if a file is likely binary by extension, magic bytes, or null-byte content.

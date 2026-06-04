@@ -110,3 +110,60 @@ async fn test_pdf_target_progress_tracked() {
     assert_eq!(p.files_completed, 1, "PDF should be fully processed");
     assert_eq!(p.files_failed, 0, "PDF extraction should not fail");
 }
+
+/// Regression test: after sync_target completes, files_processing must be 0
+/// and the progress invariant (pending + processing + completed + failed == total)
+/// must hold. This catches the bug where files_processing was set to i+1 and
+/// never decremented, leaving it stuck at files_total after completion.
+#[tokio::test]
+async fn test_sync_progress_processing_counter_resets() {
+    let (_memory, indexer, temp_dir) = setup().await;
+
+    // Create a mixed directory: text files + a binary file
+    let src_dir = temp_dir.path().join("src");
+    std::fs::create_dir(&src_dir).unwrap();
+
+    std::fs::write(src_dir.join("main.rs"), "fn main() { println!(\"hello\"); }").unwrap();
+    std::fs::write(src_dir.join("lib.rs"), "pub mod foo;").unwrap();
+    std::fs::write(src_dir.join("README.md"), "# Test Project\n\nThis is a test.").unwrap();
+    // Binary file that will fail UTF-8 validation
+    std::fs::write(src_dir.join("data.bin"), vec![0u8, 1, 2, 255, 254]).unwrap();
+
+    let target_ids = indexer
+        .add_target(src_dir.to_str().unwrap(), Some("code"), None)
+        .await
+        .expect("failed to add directory target");
+    assert_eq!(target_ids.len(), 1);
+    let target_id = &target_ids[0];
+
+    indexer
+        .sync_target(target_id)
+        .await
+        .expect("failed to sync target");
+
+    let progress = indexer.progress().get(target_id);
+    assert!(progress.is_some(), "progress should be tracked for target");
+    let p = progress.unwrap();
+
+    // Critical: files_processing must be 0 when sync is done
+    assert_eq!(
+        p.files_processing, 0,
+        "files_processing must be 0 after sync completes, got {}",
+        p.files_processing
+    );
+
+    // Invariant: pending + processing + completed + failed == total
+    let accounted = p.files_pending + p.files_processing + p.files_completed + p.files_failed;
+    assert_eq!(
+        accounted, p.files_total,
+        "progress invariant broken: pending({}) + processing({}) + completed({}) + failed({}) = {}, but total is {}",
+        p.files_pending, p.files_processing, p.files_completed, p.files_failed,
+        accounted, p.files_total
+    );
+
+    // We expect 3 text files to succeed and 1 binary file to fail
+    assert_eq!(p.files_total, 4, "expected 4 files total");
+    assert_eq!(p.files_completed, 3, "expected 3 text files to be ingested");
+    assert_eq!(p.files_failed, 1, "expected 1 binary file to fail");
+    assert_eq!(p.files_pending, 0, "expected 0 pending after sync");
+}

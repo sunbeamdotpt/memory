@@ -354,9 +354,9 @@ impl IndexService {
             p.files_pending = files.len();
         });
 
-        for (i, file) in files.iter().enumerate() {
+        for file in &files {
             self.progress.update(target_id, |p| {
-                p.files_processing = i + 1;
+                p.files_processing += 1;
                 p.current_file = Some(file.display().to_string());
             });
 
@@ -375,11 +375,13 @@ impl IndexService {
 
             self.progress.update(target_id, |p| {
                 p.files_pending = p.files_pending.saturating_sub(1);
+                p.files_processing = p.files_processing.saturating_sub(1);
             });
         }
 
         self.progress.update(target_id, |p| {
             p.current_file = None;
+            p.files_processing = 0;
         });
 
         // Update scan metadata
