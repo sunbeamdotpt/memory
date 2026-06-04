@@ -6,24 +6,34 @@
 ///   2. Code search                 — exact function signatures and struct definitions
 ///   3. Code semantic search        — natural-language descriptions of code behaviour
 ///
-/// All requests go through `handle()` exactly as a real MCP client would.
-/// The embedding model is downloaded once per test process and reused from
-/// the global MODEL_CACHE, so only the first test incurs the load cost.
+/// All requests call SunbeamServer tool methods directly with typed Parameters,
+/// exactly as rmcp's own test suite does.  The embedding model is downloaded
+/// once per test process and reused from the global MODEL_CACHE, so only the
+/// first test incurs the load cost.
 ///
 /// Run with:   cargo test --test mcp_onboarding -- --nocapture
 /// (Tests are slow on first run due to model download.)
 use mcp_server::{
     config::MemoryConfig,
     memory::service::MemoryService,
-    mcp::{protocol::Request, server::handle},
+    mcp::server::SunbeamServer,
+    mcp::{StoreFactParams, SearchFactsParams},
     indexer::{IndexService, IndexWatcher},
 };
-use serde_json::{json, Value};
+use rmcp::handler::server::wrapper::Parameters;
 
-fn setup_indexer(memory: &MemoryService) -> IndexService {
+async fn setup_server() -> (SunbeamServer, MemoryService) {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let config = MemoryConfig {
+        base_dir: dir.path().to_str().unwrap().to_string(),
+        ..Default::default()
+    };
+    let memory = MemoryService::new(&config).await.expect("MemoryService");
     let (tx, rx) = crossbeam_channel::bounded(1);
     let watcher = IndexWatcher::new(tx).unwrap();
-    IndexService::new(memory.clone(), rx, watcher)
+    let indexer = IndexService::new(memory.clone(), rx, watcher);
+    let server = SunbeamServer::new(memory.clone(), indexer);
+    (server, memory)
 }
 
 // ── corpus ────────────────────────────────────────────────────────────────────
@@ -80,54 +90,35 @@ const INDEX: &[&str] = &[
 
 // ── MCP helpers ───────────────────────────────────────────────────────────────
 
-fn req(method: &str, params: Value, id: u64) -> Request {
-    serde_json::from_value(json!({
-        "jsonrpc": "2.0",
-        "id": id,
-        "method": method,
-        "params": params,
-    }))
-    .expect("valid request JSON")
-}
-
-async fn store(memory: &MemoryService, namespace: &str, content: &str, source: Option<&str>, id: u64) {
-    let indexer = setup_indexer(memory);
-    let mut args = json!({ "namespace": namespace, "content": content });
-    if let Some(s) = source {
-        args["source"] = json!(s);
-    }
-    let r = req("tools/call", json!({ "name": "store_fact", "arguments": args }), id);
-    let resp = handle(&r, memory, &indexer).await.expect("response");
-    assert!(resp.error.is_none(), "store_fact RPC error: {:?}", resp.error);
-    let result = resp.result.as_ref().expect("result");
+async fn store(server: &SunbeamServer, namespace: &str, content: &str, source: Option<&str>) {
+    let result = server.store_fact(Parameters(StoreFactParams {
+        content: content.to_string(),
+        namespace: Some(namespace.to_string()),
+        source: source.map(|s| s.to_string()),
+    })).await.expect("store_fact should succeed");
     assert!(
-        !result["isError"].as_bool().unwrap_or(false),
+        result.is_error != Some(true),
         "store_fact tool error: {}",
-        result["content"][0]["text"].as_str().unwrap_or("")
+        result.content[0].as_text().map(|t| &*t.text).unwrap_or("")
     );
 }
 
 /// Returns the text body of the first content block in the tool response.
 async fn search(
-    memory: &MemoryService,
+    server: &SunbeamServer,
     query: &str,
     limit: usize,
     namespace: Option<&str>,
-    id: u64,
 ) -> String {
-    let indexer = setup_indexer(memory);
-    let mut args = json!({ "query": query, "limit": limit });
-    if let Some(ns) = namespace {
-        args["namespace"] = json!(ns);
-    }
-    let r = req("tools/call", json!({ "name": "search_facts", "arguments": args }), id);
-    let resp = handle(&r, memory, &indexer).await.expect("response");
-    assert!(resp.error.is_none(), "search_facts RPC error: {:?}", resp.error);
-    let result = resp.result.as_ref().expect("result");
-    result["content"][0]["text"]
-        .as_str()
-        .unwrap_or("")
-        .to_string()
+    let result = server.search_facts(Parameters(SearchFactsParams {
+        query: query.to_string(),
+        limit: Some(limit as u64),
+        namespace: namespace.map(|s| s.to_string()),
+    })).await.expect("search_facts should succeed");
+    result.content[0]
+        .as_text()
+        .map(|t| t.text.clone())
+        .unwrap_or_default()
 }
 
 fn assert_hit(result: &str, expected_terms: &[&str], query: &str) {
@@ -150,32 +141,30 @@ fn assert_hit(result: &str, expected_terms: &[&str], query: &str) {
 
 #[tokio::test]
 async fn test_onboard_general_knowledge() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let config = MemoryConfig { base_dir: dir.path().to_str().unwrap().to_string() , ..Default::default() };
-    let memory = MemoryService::new(&config).await.expect("MemoryService");
+    let (server, _memory) = setup_server().await;
 
     // Onboard: index all docs-namespace facts through the MCP interface.
-    for (i, fact) in DOCS.iter().enumerate() {
-        store(&memory, "docs", fact, None, i as u64).await;
+    for fact in DOCS.iter() {
+        store(&server, "docs", fact, None).await;
     }
 
     let q = "how does this server communicate with clients?";
-    let result = search(&memory, q, 3, None, 100).await;
+    let result = search(&server, q, 3, None).await;
     eprintln!("\n── Q: {q}\n{result}");
     assert_hit(&result, &["stdio", "json-rpc", "transport", "stdin"], q);
 
     let q = "what embedding model is used for vector search?";
-    let result = search(&memory, q, 3, None, 101).await;
+    let result = search(&server, q, 3, None).await;
     eprintln!("\n── Q: {q}\n{result}");
     assert_hit(&result, &["bge", "fastembed", "768", "embedding"], q);
 
     let q = "what operations can I perform with this server?";
-    let result = search(&memory, q, 3, None, 102).await;
+    let result = search(&server, q, 3, None).await;
     eprintln!("\n── Q: {q}\n{result}");
     assert_hit(&result, &["store_fact", "search_facts", "four", "tools"], q);
 
     let q = "where is the data stored on disk?";
-    let result = search(&memory, q, 3, None, 103).await;
+    let result = search(&server, q, 3, None).await;
     eprintln!("\n── Q: {q}\n{result}");
     assert_hit(&result, &["sqlite", "mcp_memory_base_dir", "base_dir", "database"], q);
 }
@@ -184,9 +173,7 @@ async fn test_onboard_general_knowledge() {
 
 #[tokio::test]
 async fn test_onboard_code_search() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let config = MemoryConfig { base_dir: dir.path().to_str().unwrap().to_string() , ..Default::default() };
-    let memory = MemoryService::new(&config).await.expect("MemoryService");
+    let (server, _memory) = setup_server().await;
 
     // URNs pointing to the actual source files for each CODE fact.
     const CODE_URNS: &[&str] = &[
@@ -202,39 +189,39 @@ async fn test_onboard_code_search() {
         "urn:smem:code:fs:/Users/sienna/Development/sunbeam/mcp-server/src/semantic/store.rs",
     ];
     for (i, fact) in CODE.iter().enumerate() {
-        store(&memory, "code", fact, Some(CODE_URNS[i]), i as u64).await;
+        store(&server, "code", fact, Some(CODE_URNS[i])).await;
     }
 
     // Code search: function signatures and types by name / shape
 
     let q = "search_facts function signature";
-    let result = search(&memory, q, 3, Some("code"), 100).await;
+    let result = search(&server, q, 3, Some("code")).await;
     eprintln!("\n── Q: {q}\n{result}");
     assert_hit(&result, &["search_facts", "result", "vec"], q);
 
     let q = "MemoryFact struct fields";
-    let result = search(&memory, q, 3, Some("code"), 101).await;
+    let result = search(&server, q, 3, Some("code")).await;
     eprintln!("\n── Q: {q}\n{result}");
     assert_hit(&result, &["memoryfact", "namespace", "score", "content"], q);
 
     let q = "delete a fact by id";
-    let result = search(&memory, q, 3, Some("code"), 102).await;
+    let result = search(&server, q, 3, Some("code")).await;
     eprintln!("\n── Q: {q}\n{result}");
     assert_hit(&result, &["delete_fact", "bool", "result"], q);
 
     let q = "cosine similarity calculation";
-    let result = search(&memory, q, 3, Some("code"), 103).await;
+    let result = search(&server, q, 3, Some("code")).await;
     eprintln!("\n── Q: {q}\n{result}");
     assert_hit(&result, &["cosine_similarity", "f32", "norm", "dot"], q);
 
     let q = "fused bm25 and vector search";
-    let result = search(&memory, q, 3, Some("code"), 104).await;
+    let result = search(&server, q, 3, Some("code")).await;
     eprintln!("\n── Q: {q}\n{result}");
     assert_hit(&result, &["fused_search", "bm25", "embedding", "rrf"], q);
 
     // Verify source URNs appear in results
     let q = "function signature for adding facts";
-    let result = search(&memory, q, 3, Some("code"), 105).await;
+    let result = search(&server, q, 3, Some("code")).await;
     eprintln!("\n── source URN check:\n{result}");
     assert!(
         result.contains("urn:smem:code:fs:"),
@@ -246,33 +233,31 @@ async fn test_onboard_code_search() {
 
 #[tokio::test]
 async fn test_onboard_code_semantic() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let config = MemoryConfig { base_dir: dir.path().to_str().unwrap().to_string() , ..Default::default() };
-    let memory = MemoryService::new(&config).await.expect("MemoryService");
+    let (server, _memory) = setup_server().await;
 
-    for (i, fact) in INDEX.iter().enumerate() {
-        store(&memory, "index", fact, None, i as u64).await;
+    for fact in INDEX.iter() {
+        store(&server, "index", fact, None).await;
     }
 
     // Natural-language queries against semantic descriptions of code behaviour
 
     let q = "how do I save text to memory?";
-    let result = search(&memory, q, 3, Some("index"), 100).await;
+    let result = search(&server, q, 3, Some("index")).await;
     eprintln!("\n── Q: {q}\n{result}");
     assert_hit(&result, &["store_fact", "embed", "persist", "sqlite"], q);
 
     let q = "finding the most relevant stored content";
-    let result = search(&memory, q, 3, Some("index"), 101).await;
+    let result = search(&server, q, 3, Some("index")).await;
     eprintln!("\n── Q: {q}\n{result}");
     assert_hit(&result, &["cosine", "similarity", "search_facts", "ranked"], q);
 
     let q = "what happens when I delete a fact?";
-    let result = search(&memory, q, 3, Some("index"), 102).await;
+    let result = search(&server, q, 3, Some("index")).await;
     eprintln!("\n── Q: {q}\n{result}");
     assert_hit(&result, &["sqlite", "evict", "hashmap", "delete", "index"], q);
 
     let q = "searching with a keyword plus vector";
-    let result = search(&memory, q, 3, Some("index"), 103).await;
+    let result = search(&server, q, 3, Some("index")).await;
     eprintln!("\n── Q: {q}\n{result}");
     assert_hit(&result, &["fused", "keyword", "vector", "bm25", "rrf"], q);
 }

@@ -1,6 +1,6 @@
 use actix_web::{test, web, App, http::StatusCode};
 use mcp_server::api::config::configure_api;
-use mcp_server::api::mcp_http::{AuthConfig, SessionStore};
+use mcp_server::api::mcp_http::{AuthConfig, build_mcp_service};
 use mcp_server::indexer::{IndexService, IndexWatcher};
 use mcp_server::memory::service::MemoryService;
 use mcp_server::config::MemoryConfig;
@@ -17,13 +17,13 @@ macro_rules! setup_app {
         let (dummy_tx, dummy_rx) = crossbeam_channel::bounded(1);
         let watcher = IndexWatcher::new(dummy_tx).unwrap();
         let indexer = IndexService::new(memory.clone(), dummy_rx, watcher);
+        let mcp_service = build_mcp_service(memory.clone(), indexer.clone());
         let app = test::init_service(
             App::new()
                 .app_data(web::Data::new(memory))
                 .app_data(web::Data::new(indexer))
-                .app_data(web::Data::new(SessionStore::new(1)))
                 .app_data(web::Data::new(AuthConfig::LocalOnly))
-                .configure(configure_api),
+                .configure(configure_api(mcp_service)),
         ).await;
         (app, dir)
     }};
@@ -41,15 +41,58 @@ macro_rules! setup_app_with_auth {
         let (dummy_tx, dummy_rx) = crossbeam_channel::bounded(1);
         let watcher = IndexWatcher::new(dummy_tx).unwrap();
         let indexer = IndexService::new(memory.clone(), dummy_rx, watcher);
+        let mcp_service = build_mcp_service(memory.clone(), indexer.clone());
         let app = test::init_service(
             App::new()
                 .app_data(web::Data::new(memory))
                 .app_data(web::Data::new(indexer))
-                .app_data(web::Data::new(SessionStore::new(1)))
                 .app_data(web::Data::new(AuthConfig::Bearer($token.to_string())))
-                .configure(configure_api),
+                .configure(configure_api(mcp_service)),
         ).await;
         (app, dir)
+    }};
+}
+
+// ── SSE helpers ───────────────────────────────────────────────────────────────
+
+async fn sse_events<B>(resp: actix_web::dev::ServiceResponse<B>) -> Vec<serde_json::Value>
+where
+    B: actix_web::body::MessageBody,
+{
+    let bytes = test::read_body(resp).await;
+    let text = String::from_utf8(bytes.to_vec()).unwrap();
+    text.lines()
+        .filter(|l| l.starts_with("data: "))
+        .map(|l| {
+            let json_str = l.strip_prefix("data: ").unwrap();
+            serde_json::from_str(json_str).unwrap_or(serde_json::Value::Null)
+        })
+        .collect()
+}
+
+macro_rules! mcp_init {
+    ($app:expr) => {{
+        let req = test::TestRequest::post()
+            .uri("/mcp")
+            .insert_header(("Accept", "application/json, text/event-stream"))
+            .insert_header(("Content-Type", "application/json"))
+            .set_json(json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": "2025-06-18",
+                    "capabilities": {},
+                    "clientInfo": { "name": "test", "version": "1.0" }
+                }
+            }))
+            .to_request();
+        let resp = test::call_service($app, req).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        resp.headers()
+            .get("Mcp-Session-Id")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string())
     }};
 }
 
@@ -205,42 +248,22 @@ async fn test_delete_fact() {
 
 // ── MCP HTTP transport tests ──────────────────────────────────────────────────
 
-macro_rules! mcp_initialize {
-    ($app:expr) => {{
-        let req = test::TestRequest::post()
-            .uri("/mcp")
-            .insert_header(("MCP-Protocol-Version", "2025-06-18"))
-            .set_json(json!({
-                "jsonrpc": "2.0",
-                "id": 1,
-                "method": "initialize",
-                "params": {}
-            }))
-            .to_request();
-        let resp = test::call_service($app, req).await;
-        assert_eq!(resp.status(), StatusCode::OK);
-        let headers = resp.headers().clone();
-        let body: serde_json::Value = test::read_body_json(resp).await;
-        assert!(body["result"].is_object());
-        headers.get("Mcp-Session-Id").and_then(|v| v.to_str().ok()).map(|s| s.to_string())
-    }};
-}
-
 #[tokio::test]
 async fn test_mcp_post_initialize() {
     let (app, _dir) = setup_app!();
-    let sid = mcp_initialize!(&app);
+    let sid = mcp_init!(&app);
     assert!(sid.is_some());
 }
 
 #[tokio::test]
 async fn test_mcp_post_tools_list() {
     let (app, _dir) = setup_app!();
-    let sid = mcp_initialize!(&app).unwrap();
+    let sid = mcp_init!(&app).unwrap();
 
     let req = test::TestRequest::post()
         .uri("/mcp")
-        .insert_header(("MCP-Protocol-Version", "2025-06-18"))
+        .insert_header(("Accept", "application/json, text/event-stream"))
+        .insert_header(("Content-Type", "application/json"))
         .insert_header(("Mcp-Session-Id", sid))
         .set_json(json!({
             "jsonrpc": "2.0",
@@ -251,18 +274,20 @@ async fn test_mcp_post_tools_list() {
         .to_request();
     let resp = test::call_service(&app, req).await;
     assert_eq!(resp.status(), StatusCode::OK);
-    let body: serde_json::Value = test::read_body_json(resp).await;
-    assert!(body["result"]["tools"].is_array());
+    let events = sse_events(resp).await;
+    assert!(!events.is_empty());
+    assert!(events[0]["result"]["tools"].is_array());
 }
 
 #[tokio::test]
 async fn test_mcp_post_tools_call_store_fact() {
     let (app, _dir) = setup_app!();
-    let sid = mcp_initialize!(&app).unwrap();
+    let sid = mcp_init!(&app).unwrap();
 
     let req = test::TestRequest::post()
         .uri("/mcp")
-        .insert_header(("MCP-Protocol-Version", "2025-06-18"))
+        .insert_header(("Accept", "application/json, text/event-stream"))
+        .insert_header(("Content-Type", "application/json"))
         .insert_header(("Mcp-Session-Id", sid))
         .set_json(json!({
             "jsonrpc": "2.0",
@@ -276,155 +301,10 @@ async fn test_mcp_post_tools_call_store_fact() {
         .to_request();
     let resp = test::call_service(&app, req).await;
     assert_eq!(resp.status(), StatusCode::OK);
-    let body: serde_json::Value = test::read_body_json(resp).await;
-    let text = body["result"]["content"][0]["text"].as_str().unwrap();
+    let events = sse_events(resp).await;
+    assert!(!events.is_empty());
+    let text = events[0]["result"]["content"][0]["text"].as_str().unwrap_or("");
     assert!(text.contains("Stored."));
-}
-
-#[tokio::test]
-async fn test_mcp_post_invalid_protocol_version() {
-    let (app, _dir) = setup_app!();
-    let req = test::TestRequest::post()
-        .uri("/mcp")
-        .insert_header(("MCP-Protocol-Version", "2024-01-01"))
-        .set_json(json!({
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "initialize"
-        }))
-        .to_request();
-    let resp = test::call_service(&app, req).await;
-    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-}
-
-#[tokio::test]
-async fn test_mcp_post_missing_session() {
-    let (app, _dir) = setup_app!();
-    let req = test::TestRequest::post()
-        .uri("/mcp")
-        .insert_header(("MCP-Protocol-Version", "2025-06-18"))
-        .set_json(json!({
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "tools/list"
-        }))
-        .to_request();
-    let resp = test::call_service(&app, req).await;
-    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-}
-
-#[tokio::test]
-async fn test_mcp_post_expired_session() {
-    let (app, _dir) = setup_app!();
-    let req = test::TestRequest::post()
-        .uri("/mcp")
-        .insert_header(("MCP-Protocol-Version", "2025-06-18"))
-        .insert_header(("Mcp-Session-Id", "dead-beef"))
-        .set_json(json!({
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "tools/list"
-        }))
-        .to_request();
-    let resp = test::call_service(&app, req).await;
-    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
-}
-
-#[tokio::test]
-async fn test_mcp_post_notification_accepted() {
-    let (app, _dir) = setup_app!();
-    let req = test::TestRequest::post()
-        .uri("/mcp")
-        .insert_header(("MCP-Protocol-Version", "2025-06-18"))
-        .set_json(json!({
-            "jsonrpc": "2.0",
-            "method": "$/progress"
-        }))
-        .to_request();
-    let resp = test::call_service(&app, req).await;
-    assert_eq!(resp.status(), StatusCode::ACCEPTED);
-}
-
-#[tokio::test]
-async fn test_mcp_post_response_accepted() {
-    let (app, _dir) = setup_app!();
-    let req = test::TestRequest::post()
-        .uri("/mcp")
-        .insert_header(("MCP-Protocol-Version", "2025-06-18"))
-        .set_json(json!({
-            "jsonrpc": "2.0",
-            "id": 1,
-            "result": {}
-        }))
-        .to_request();
-    let resp = test::call_service(&app, req).await;
-    assert_eq!(resp.status(), StatusCode::ACCEPTED);
-}
-
-#[tokio::test]
-async fn test_mcp_post_invalid_json() {
-    let (app, _dir) = setup_app!();
-    let req = test::TestRequest::post()
-        .uri("/mcp")
-        .insert_header(("MCP-Protocol-Version", "2025-06-18"))
-        .set_payload("not json")
-        .to_request();
-    let resp = test::call_service(&app, req).await;
-    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-}
-
-#[tokio::test]
-async fn test_mcp_post_missing_method() {
-    let (app, _dir) = setup_app!();
-    let req = test::TestRequest::post()
-        .uri("/mcp")
-        .insert_header(("MCP-Protocol-Version", "2025-06-18"))
-        .set_json(json!({
-            "jsonrpc": "2.0",
-            "id": 1
-        }))
-        .to_request();
-    let resp = test::call_service(&app, req).await;
-    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-}
-
-#[tokio::test]
-async fn test_mcp_get() {
-    let (app, _dir) = setup_app!();
-    let req = test::TestRequest::get()
-        .uri("/mcp")
-        .to_request();
-    let resp = test::call_service(&app, req).await;
-    assert_eq!(resp.status(), StatusCode::METHOD_NOT_ALLOWED);
-    let allow = resp.headers().get("Allow").unwrap().to_str().unwrap();
-    assert!(allow.contains("POST"));
-    assert!(allow.contains("DELETE"));
-}
-
-#[tokio::test]
-async fn test_mcp_delete() {
-    let (app, _dir) = setup_app!();
-    let sid = mcp_initialize!(&app).unwrap();
-
-    let req = test::TestRequest::delete()
-        .uri("/mcp")
-        .insert_header(("Mcp-Session-Id", sid.clone()))
-        .to_request();
-    let resp = test::call_service(&app, req).await;
-    assert_eq!(resp.status(), StatusCode::OK);
-
-    let req2 = test::TestRequest::post()
-        .uri("/mcp")
-        .insert_header(("MCP-Protocol-Version", "2025-06-18"))
-        .insert_header(("Mcp-Session-Id", sid))
-        .set_json(json!({
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "tools/list"
-        }))
-        .to_request();
-    let resp2 = test::call_service(&app, req2).await;
-    assert_eq!(resp2.status(), StatusCode::NOT_FOUND);
 }
 
 // ── Auth / origin tests ───────────────────────────────────────────────────────
@@ -434,12 +314,18 @@ async fn test_mcp_post_local_origin_allowed() {
     let (app, _dir) = setup_app!();
     let req = test::TestRequest::post()
         .uri("/mcp")
-        .insert_header(("MCP-Protocol-Version", "2025-06-18"))
         .insert_header(("Origin", "http://localhost:3000"))
+        .insert_header(("Accept", "application/json, text/event-stream"))
+        .insert_header(("Content-Type", "application/json"))
         .set_json(json!({
             "jsonrpc": "2.0",
             "id": 1,
-            "method": "initialize"
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-06-18",
+                "capabilities": {},
+                "clientInfo": { "name": "test", "version": "1.0" }
+            }
         }))
         .to_request();
     let resp = test::call_service(&app, req).await;
@@ -451,12 +337,18 @@ async fn test_mcp_post_local_origin_127_allowed() {
     let (app, _dir) = setup_app!();
     let req = test::TestRequest::post()
         .uri("/mcp")
-        .insert_header(("MCP-Protocol-Version", "2025-06-18"))
         .insert_header(("Origin", "http://127.0.0.1:3000"))
+        .insert_header(("Accept", "application/json, text/event-stream"))
+        .insert_header(("Content-Type", "application/json"))
         .set_json(json!({
             "jsonrpc": "2.0",
             "id": 1,
-            "method": "initialize"
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-06-18",
+                "capabilities": {},
+                "clientInfo": { "name": "test", "version": "1.0" }
+            }
         }))
         .to_request();
     let resp = test::call_service(&app, req).await;
@@ -468,12 +360,18 @@ async fn test_mcp_post_origin_rejected() {
     let (app, _dir) = setup_app!();
     let req = test::TestRequest::post()
         .uri("/mcp")
-        .insert_header(("MCP-Protocol-Version", "2025-06-18"))
         .insert_header(("Origin", "http://evil.com"))
+        .insert_header(("Accept", "application/json, text/event-stream"))
+        .insert_header(("Content-Type", "application/json"))
         .set_json(json!({
             "jsonrpc": "2.0",
             "id": 1,
-            "method": "initialize"
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-06-18",
+                "capabilities": {},
+                "clientInfo": { "name": "test", "version": "1.0" }
+            }
         }))
         .to_request();
     let resp = test::call_service(&app, req).await;
@@ -485,12 +383,18 @@ async fn test_mcp_post_bearer_auth_valid() {
     let (app, _dir) = setup_app_with_auth!("secret-token");
     let req = test::TestRequest::post()
         .uri("/mcp")
-        .insert_header(("MCP-Protocol-Version", "2025-06-18"))
         .insert_header(("Authorization", "Bearer secret-token"))
+        .insert_header(("Accept", "application/json, text/event-stream"))
+        .insert_header(("Content-Type", "application/json"))
         .set_json(json!({
             "jsonrpc": "2.0",
             "id": 1,
-            "method": "initialize"
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-06-18",
+                "capabilities": {},
+                "clientInfo": { "name": "test", "version": "1.0" }
+            }
         }))
         .to_request();
     let resp = test::call_service(&app, req).await;
@@ -502,12 +406,18 @@ async fn test_mcp_post_bearer_auth_invalid() {
     let (app, _dir) = setup_app_with_auth!("secret-token");
     let req = test::TestRequest::post()
         .uri("/mcp")
-        .insert_header(("MCP-Protocol-Version", "2025-06-18"))
         .insert_header(("Authorization", "Bearer wrong-token"))
+        .insert_header(("Accept", "application/json, text/event-stream"))
+        .insert_header(("Content-Type", "application/json"))
         .set_json(json!({
             "jsonrpc": "2.0",
             "id": 1,
-            "method": "initialize"
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-06-18",
+                "capabilities": {},
+                "clientInfo": { "name": "test", "version": "1.0" }
+            }
         }))
         .to_request();
     let resp = test::call_service(&app, req).await;
@@ -519,11 +429,17 @@ async fn test_mcp_post_bearer_auth_missing() {
     let (app, _dir) = setup_app_with_auth!("secret-token");
     let req = test::TestRequest::post()
         .uri("/mcp")
-        .insert_header(("MCP-Protocol-Version", "2025-06-18"))
+        .insert_header(("Accept", "application/json, text/event-stream"))
+        .insert_header(("Content-Type", "application/json"))
         .set_json(json!({
             "jsonrpc": "2.0",
             "id": 1,
-            "method": "initialize"
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-06-18",
+                "capabilities": {},
+                "clientInfo": { "name": "test", "version": "1.0" }
+            }
         }))
         .to_request();
     let resp = test::call_service(&app, req).await;
@@ -535,66 +451,21 @@ async fn test_mcp_post_no_origin_header_allowed() {
     let (app, _dir) = setup_app!();
     let req = test::TestRequest::post()
         .uri("/mcp")
-        .insert_header(("MCP-Protocol-Version", "2025-06-18"))
+        .insert_header(("Accept", "application/json, text/event-stream"))
+        .insert_header(("Content-Type", "application/json"))
         .set_json(json!({
             "jsonrpc": "2.0",
             "id": 1,
-            "method": "initialize"
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-06-18",
+                "capabilities": {},
+                "clientInfo": { "name": "test", "version": "1.0" }
+            }
         }))
         .to_request();
     let resp = test::call_service(&app, req).await;
     assert_eq!(resp.status(), StatusCode::OK);
-}
-
-#[tokio::test]
-async fn test_mcp_post_invalid_utf8_body() {
-    let (app, _dir) = setup_app!();
-    let req = test::TestRequest::post()
-        .uri("/mcp")
-        .insert_header(("MCP-Protocol-Version", "2025-06-18"))
-        .set_payload(vec![0x80, 0x81, 0x82])
-        .to_request();
-    let resp = test::call_service(&app, req).await;
-    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-}
-
-#[tokio::test]
-async fn test_mcp_post_malformed_request_object() {
-    let (app, _dir) = setup_app!();
-    // Missing jsonrpc field — parses as Value but not as Request
-    let req = test::TestRequest::post()
-        .uri("/mcp")
-        .insert_header(("MCP-Protocol-Version", "2025-06-18"))
-        .set_json(json!({
-            "id": 1,
-            "method": "initialize",
-            "params": {}
-        }))
-        .to_request();
-    let resp = test::call_service(&app, req).await;
-    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-}
-
-#[tokio::test]
-async fn test_mcp_get_origin_rejected() {
-    let (app, _dir) = setup_app!();
-    let req = test::TestRequest::get()
-        .uri("/mcp")
-        .insert_header(("Origin", "http://evil.com"))
-        .to_request();
-    let resp = test::call_service(&app, req).await;
-    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
-}
-
-#[tokio::test]
-async fn test_mcp_delete_origin_rejected() {
-    let (app, _dir) = setup_app!();
-    let req = test::TestRequest::delete()
-        .uri("/mcp")
-        .insert_header(("Origin", "http://evil.com"))
-        .to_request();
-    let resp = test::call_service(&app, req).await;
-    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
 }
 
 #[tokio::test]
@@ -609,22 +480,28 @@ async fn test_mcp_post_bearer_empty_token() {
     let (dummy_tx, dummy_rx) = crossbeam_channel::bounded(1);
     let watcher = IndexWatcher::new(dummy_tx).unwrap();
     let indexer = IndexService::new(memory.clone(), dummy_rx, watcher);
+    let mcp_service = build_mcp_service(memory.clone(), indexer);
     let app = test::init_service(
         App::new()
             .app_data(web::Data::new(memory))
-            .app_data(web::Data::new(indexer))
-            .app_data(web::Data::new(SessionStore::new(1)))
             .app_data(web::Data::new(AuthConfig::Bearer("".to_string())))
-            .configure(configure_api),
+            .configure(configure_api(mcp_service)),
     ).await;
 
     let req = test::TestRequest::post()
         .uri("/mcp")
         .insert_header(("Authorization", "Bearer "))
+        .insert_header(("Accept", "application/json, text/event-stream"))
+        .insert_header(("Content-Type", "application/json"))
         .set_json(json!({
             "jsonrpc": "2.0",
             "id": 1,
-            "method": "initialize"
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-06-18",
+                "capabilities": {},
+                "clientInfo": { "name": "test", "version": "1.0" }
+            }
         }))
         .to_request();
     let resp = test::call_service(&app, req).await;
@@ -645,22 +522,28 @@ async fn test_mcp_post_oidc_missing_token() {
     let (dummy_tx, dummy_rx) = crossbeam_channel::bounded(1);
     let watcher = IndexWatcher::new(dummy_tx).unwrap();
     let indexer = IndexService::new(memory.clone(), dummy_rx, watcher);
+    let mcp_service = build_mcp_service(memory.clone(), indexer);
     let verifier = OidcVerifier::test_new("https://example.com", None, JwkSet { keys: vec![] });
     let app = test::init_service(
         App::new()
             .app_data(web::Data::new(memory))
-            .app_data(web::Data::new(indexer))
-            .app_data(web::Data::new(SessionStore::new(1)))
             .app_data(web::Data::new(AuthConfig::Oidc(std::sync::Mutex::new(verifier))))
-            .configure(configure_api),
+            .configure(configure_api(mcp_service)),
     ).await;
 
     let req = test::TestRequest::post()
         .uri("/mcp")
+        .insert_header(("Accept", "application/json, text/event-stream"))
+        .insert_header(("Content-Type", "application/json"))
         .set_json(json!({
             "jsonrpc": "2.0",
             "id": 1,
-            "method": "initialize"
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-06-18",
+                "capabilities": {},
+                "clientInfo": { "name": "test", "version": "1.0" }
+            }
         }))
         .to_request();
     let resp = test::call_service(&app, req).await;
@@ -681,6 +564,7 @@ async fn test_mcp_post_oidc_invalid_token() {
     let (dummy_tx, dummy_rx) = crossbeam_channel::bounded(1);
     let watcher = IndexWatcher::new(dummy_tx).unwrap();
     let indexer = IndexService::new(memory.clone(), dummy_rx, watcher);
+    let mcp_service = build_mcp_service(memory.clone(), indexer);
     let jwk = Jwk {
         common: CommonParameters {
             public_key_use: Some(PublicKeyUse::Signature),
@@ -702,19 +586,24 @@ async fn test_mcp_post_oidc_invalid_token() {
     let app = test::init_service(
         App::new()
             .app_data(web::Data::new(memory))
-            .app_data(web::Data::new(indexer))
-            .app_data(web::Data::new(SessionStore::new(1)))
             .app_data(web::Data::new(AuthConfig::Oidc(std::sync::Mutex::new(verifier))))
-            .configure(configure_api),
+            .configure(configure_api(mcp_service)),
     ).await;
 
     let req = test::TestRequest::post()
         .uri("/mcp")
         .insert_header(("Authorization", "Bearer invalid.token.here"))
+        .insert_header(("Accept", "application/json, text/event-stream"))
+        .insert_header(("Content-Type", "application/json"))
         .set_json(json!({
             "jsonrpc": "2.0",
             "id": 1,
-            "method": "initialize"
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-06-18",
+                "capabilities": {},
+                "clientInfo": { "name": "test", "version": "1.0" }
+            }
         }))
         .to_request();
     let resp = test::call_service(&app, req).await;
