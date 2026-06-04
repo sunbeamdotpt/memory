@@ -22,8 +22,8 @@ The server exposes an MCP (Model Context Protocol) interface over **stdio** (loc
 
 | Mode | Trigger | Transport | Auth |
 |------|---------|-----------|------|
-| stdio (default) | no `--http` flag | stdin/stdout JSON-RPC | none (localhost only) |
-| HTTP | `--http <PORT>` | HTTP POST `/mcp` + REST endpoints | `MCP_AUTH_TOKEN` bearer or OIDC JWT |
+| stdio (default) | no subcommand | stdin/stdout MCP | none (localhost only) |
+| HTTP | `http --port <PORT>` | Streamable HTTP `/mcp` + REST endpoints | `MCP_AUTH_TOKEN` bearer or OIDC JWT |
 
 ---
 
@@ -33,11 +33,14 @@ The server exposes an MCP (Model Context Protocol) interface over **stdio** (loc
 |-------|--------------|---------|
 | Async runtime | `tokio` (full features) | Async I/O, spawning tasks |
 | HTTP server | `actix-web` | REST API and MCP HTTP transport |
+| MCP protocol | `rmcp` | Native Rust MCP SDK (stdio + Streamable HTTP) |
+| MCP actix-web | `rmcp-actix-web` | Streamable HTTP transport for actix-web |
 | Serialization | `serde`, `serde_json` | JSON-RPC and REST payloads |
 | Database | `rusqlite` (bundled) | SQLite persistence, FTS5 |
 | Vector search | `usearch` | HNSW ANN index (cosine similarity) |
 | Embeddings | `fastembed` | Local ONNX embedding models |
-| Error handling | `thiserror` | Typed errors |
+| Error handling | `thiserror`, `anyhow` | Typed errors + ergonomic main errors |
+| CLI parsing | `clap` (derive feature) | Structured command-line interface |
 | File watching | `notify`, `crossbeam-channel` | Async file-system events |
 | Git scanning | `gix` | Pure-Rust git repo introspection |
 | PDF extraction | `pdf_oxide` | Page-by-page text extraction |
@@ -59,7 +62,7 @@ cargo build
 cargo build --release
 
 # Run HTTP server on port 3456
-cargo run --release -- --http 3456
+cargo run --release -- http --port 3456
 
 # Run stdio MCP server (default)
 cargo run --release
@@ -75,7 +78,6 @@ The release binary is at `target/release/sunbeam-memory`.
 | `MCP_AUTH_TOKEN` | unset | Simple bearer token for remote HTTP mode |
 | `MCP_OIDC_ISSUER` | unset | OIDC issuer URL; enables JWT validation |
 | `MCP_OIDC_AUDIENCE` | unset | Expected `aud` claim (optional) |
-| `MCP_SESSION_TTL_HOURS` | `24` | HTTP session expiry |
 
 ---
 
@@ -83,7 +85,7 @@ The release binary is at `target/release/sunbeam-memory`.
 
 ```
 src/
-├── main.rs              # Binary: mode selection (stdio vs HTTP), shared init
+├── main.rs              # Binary entry point: clap CLI, stdio / HTTP mode dispatch
 ├── lib.rs               # Public module re-exports
 ├── config.rs            # MemoryConfig (env-driven)
 ├── error.rs             # ServerError enum + Result<T>
@@ -92,9 +94,9 @@ src/
 ├── semantic.rs          # SemanticConfig + SemanticFact types
 ├── urn.rs               # Source URN parser/builder/validator (~800 lines)
 ├── api/                 # HTTP REST layer
-│   ├── config.rs        # Actix route registration
+│   ├── config.rs        # Actix route registration (REST + MCP Streamable HTTP)
 │   ├── handlers.rs      # REST endpoint handlers
-│   ├── mcp_http.rs      # MCP-over-HTTP transport + auth + sessions
+│   ├── mcp_http.rs      # MCP Streamable HTTP transport (rmcp) + auth middleware
 │   ├── middleware.rs    # Placeholder
 │   ├── oidc.rs          # OIDC JWKS fetching & JWT validation
 │   └── types.rs         # Request/response DTOs
@@ -115,8 +117,7 @@ src/
 │   └── store.rs         # Thin SemanticStore wrapper
 ├── mcp/                 # MCP protocol implementation
 │   ├── mod.rs
-│   ├── protocol.rs      # JSON-RPC request/response types + constants
-│   └── server.rs        # Request dispatcher + all tool handlers (~740 lines)
+│   └── server.rs        # SunbeamServer: rmcp ServerHandler + tool router (~630 lines)
 └── semantic/            # Storage engine
     ├── db.rs            # SemanticDB: SQLite schema, FTS5, USearch persistence (~1000 lines)
     ├── search.rs        # Search helpers
