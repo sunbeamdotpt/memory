@@ -6,6 +6,8 @@ Also watches directories and auto-ingests files (code, PDFs, text) so your memor
 
 Works as a local stdio MCP server (zero config, Claude Desktop) or as a remote HTTP server so you can access your memory from any machine.
 
+Built on the official [`rmcp`](https://github.com/modelcontextprotocol/rust-sdk) Rust SDK for native MCP protocol support.
+
 ---
 
 ## Install
@@ -16,13 +18,13 @@ Works as a local stdio MCP server (zero config, Claude Desktop) or as a remote H
 git clone https://github.com/your-org/sunbeam-memory
 cd sunbeam-memory/mcp-server
 cargo build --release
-# binary at target/release/mcp-server
+# binary at target/release/sunbeam-memory
 ```
 
 Or run directly without a permanent binary:
 
 ```bash
-cargo run -- --http 3456
+cargo run --release -- http --port 3456
 ```
 
 ---
@@ -37,7 +39,7 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
 {
   "mcpServers": {
     "memory": {
-      "command": "/path/to/mcp-server"
+      "command": "/path/to/sunbeam-memory"
     }
   }
 }
@@ -54,7 +56,7 @@ Set `MCP_MEMORY_BASE_DIR` to change it:
 {
   "mcpServers": {
     "memory": {
-      "command": "/path/to/mcp-server",
+      "command": "/path/to/sunbeam-memory",
       "env": {
         "MCP_MEMORY_BASE_DIR": "/Users/you/.local/share/sunbeam-memory"
       }
@@ -79,7 +81,7 @@ openssl rand -hex 32
 **2. Start the server with the token:**
 
 ```bash
-MCP_AUTH_TOKEN=a3f8c2e1b4d7... cargo run --release -- --http 3456
+MCP_AUTH_TOKEN=a3f8c2e1b4d7... cargo run --release -- http --port 3456
 ```
 
 With `MCP_AUTH_TOKEN` set, the server binds to `0.0.0.0` and requires `Authorization: Bearer <token>` on every request.
@@ -109,7 +111,7 @@ If you already have an OIDC provider (Keycloak, Auth0, Dex, Kratos+Hydra, etc.),
 ```bash
 MCP_OIDC_ISSUER=https://auth.example.com \
 MCP_OIDC_AUDIENCE=sunbeam-memory \       # optional — leave out to skip aud check
-  cargo run --release -- --http 3456
+  cargo run --release -- http --port 3456
 ```
 
 Your MCP client then gets a token from the provider and passes it as a Bearer token:
@@ -138,7 +140,6 @@ OIDC takes priority over `MCP_AUTH_TOKEN` if both are set.
 | `MCP_AUTH_TOKEN` | _(unset)_ | Simple bearer token for remote hosting. Unset = localhost-only |
 | `MCP_OIDC_ISSUER` | _(unset)_ | OIDC issuer URL. When set, validates JWT bearer tokens via JWKS |
 | `MCP_OIDC_AUDIENCE` | _(unset)_ | Expected `aud` claim. Leave unset to skip audience validation |
-| `MCP_SESSION_TTL_HOURS` | `24` | How long HTTP sessions stay alive |
 
 ---
 
@@ -233,10 +234,10 @@ target_id  (required) ID of the target
 ```
 
 #### `restore_stale_fact`
-Un-mark a fact as stale (e.g. after a file was temporarily deleted).
+Restore a stale (soft-deleted) fact so it appears in search again.
 
 ```
-source_urn  (required) The source URN of the fact to restore
+id  (required) Fact ID to restore
 ```
 
 ### URN tools
@@ -268,7 +269,7 @@ List recent ingestion or system errors so you can be informed of failures.
 
 ```
 component  (optional) Filter to a specific component (e.g. "indexer", "extractor")
-limit      (optional) Max errors to return. Default: 50
+limit      (optional) Max errors to return. Default: 10
 ```
 
 #### `resolve_error`
@@ -318,18 +319,24 @@ To back up your memory: copy the `semantic.db` file. It's self-contained.
 ```
 Claude / MCP client
       │
-      │  stdio (local)  or  HTTP POST /mcp  (remote)
+      │  stdio (local)  or  Streamable HTTP /mcp  (remote)
       ▼
- mcp/server.rs        ← JSON-RPC dispatch, tool handlers
+ rmcp transport       ← official Rust MCP SDK handles protocol framing
+      │
+ mcp/server.rs        ← SunbeamServer: tool router + business logic
       │
  memory/service.rs    ← embed content, business logic
       │
- semantic/store.rs    ← cosine similarity index (usearch)
- semantic/db.rs       ← SQLite persistence (facts + embeddings + errors)
+ semantic/store.rs    ← HNSW vector search (usearch)
+ semantic/db.rs       ← SQLite persistence (facts + FTS5 + errors)
       │
- indexer/             ← file watcher, PDF extractor, scanner
+ indexer/             ← file watcher, PDF extractor, git scanner
 ```
+
+**Protocol:** [MCP 2025-06-18](https://spec.modelcontextprotocol.io/specification/2025-06-18/) via [rmcp](https://github.com/modelcontextprotocol/rust-sdk) (stdio + Streamable HTTP).
 
 **Embeddings:** BGE-Base-English-v1.5 via [fastembed](https://github.com/Anush008/fastembed-rs), 768 dimensions, ~130 MB model download on first run.
 
-**Vector search:** [usearch](https://github.com/unum-cloud/usearch) (in-memory, cosine similarity).
+**Vector search:** [usearch](https://github.com/unum-cloud/usearch) HNSW index with cosine similarity, persisted as a blob inside SQLite.
+
+**Search strategy:** Fused BM25 + vector search via Reciprocal Rank Fusion (RRF).
