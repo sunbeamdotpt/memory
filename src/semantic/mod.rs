@@ -1,20 +1,23 @@
-// Main semantic module
-// Re-exports semantic functionality
+//! Semantic storage layer.
+//!
+//! Provides SQLite persistence, FTS5 full-text search, and HNSW vector
+//! indexing via `usearch`. The [`SemanticStore`] in [`store`] is the main
+//! entry point; [`db`] contains the low-level schema and SQL.
 
 pub mod db;
 pub mod store;
-// index.rs removed — replaced by persistent sqlite-vec indexing
-// search.rs removed — SemanticSearch was dead code, functionality lives in store.rs
 
-/// Semantic fact storage
+/// A stored fact with its embedding vector.
 #[derive(Debug, Clone)]
 pub struct SemanticFact {
     pub id: String,
     pub namespace: String,
     pub content: String,
-    pub created_at: i64, // Unix timestamp
+    /// Unix epoch seconds.
+    pub created_at: i64,
     pub embedding: Vec<f32>,
-    pub source: Option<String>, // smem URN identifying where this fact came from
+    /// Optional smem URN identifying where this fact came from.
+    pub source: Option<String>,
 }
 
 #[derive(Debug, Clone)]
