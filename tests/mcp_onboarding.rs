@@ -13,8 +13,9 @@
 ///
 /// Run with:   cargo test --test mcp_onboarding -- --nocapture
 /// (Tests are slow on first run due to model download.)
-use mcp_server::{
+use sunbeam_memory::{
     config::MemoryConfig,
+    core::service::CoreService,
     memory::service::MemoryService,
     mcp::server::SunbeamServer,
     mcp::{StoreFactParams, SearchFactsParams},
@@ -32,7 +33,8 @@ async fn setup_server() -> (SunbeamServer, MemoryService) {
     let (tx, rx) = crossbeam_channel::bounded(1);
     let watcher = IndexWatcher::new(tx).unwrap();
     let indexer = IndexService::new(memory.clone(), rx, watcher);
-    let server = SunbeamServer::new(memory.clone(), indexer);
+    let core = CoreService::new(memory.clone(), indexer);
+    let server = SunbeamServer::new(core);
     (server, memory)
 }
 

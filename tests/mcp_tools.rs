@@ -1,5 +1,6 @@
-use mcp_server::{
+use sunbeam_memory::{
     config::MemoryConfig,
+    core::service::CoreService,
     indexer::{IndexService, IndexWatcher},
     memory::service::MemoryService,
     mcp::server::SunbeamServer,
@@ -20,7 +21,8 @@ async fn setup() -> (SunbeamServer, tempfile::TempDir) {
     let (dummy_tx, dummy_rx) = crossbeam_channel::bounded(1);
     let watcher = IndexWatcher::new(dummy_tx).unwrap();
     let indexer = IndexService::new(memory.clone(), dummy_rx, watcher);
-    let server = SunbeamServer::new(memory, indexer);
+    let core = CoreService::new(memory, indexer);
+    let server = SunbeamServer::new(core);
     (server, dir)
 }
 
@@ -427,21 +429,21 @@ async fn test_parse_source_urn_invalid() {
 
 #[test]
 fn test_parse_ts_unix_timestamp() {
-    use mcp_server::mcp::server::parse_ts;
+    use sunbeam_memory::core::service::parse_ts;
     let result = parse_ts("1609459200");
     assert_eq!(result, Some(1609459200));
 }
 
 #[test]
 fn test_parse_ts_rfc3339() {
-    use mcp_server::mcp::server::parse_ts;
+    use sunbeam_memory::core::service::parse_ts;
     let result = parse_ts("2021-01-01T00:00:00Z");
     assert_eq!(result, Some(1609459200));
 }
 
 #[test]
 fn test_parse_ts_invalid() {
-    use mcp_server::mcp::server::parse_ts;
+    use sunbeam_memory::core::service::parse_ts;
     let result = parse_ts("not-a-date");
     assert_eq!(result, None);
 }

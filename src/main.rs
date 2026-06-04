@@ -1,8 +1,9 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 
-use mcp_server::{
+use sunbeam_memory::{
     config::MemoryConfig,
+    core::service::CoreService,
     memory::service::MemoryService,
     mcp::server::SunbeamServer,
 };
@@ -40,9 +41,10 @@ async fn run_stdio() -> Result<()> {
     let memory = init_memory(config).await?;
 
     let watcher =
-        mcp_server::indexer::IndexWatcher::new(event_tx).context("failed to create file watcher")?;
-    let indexer = mcp_server::indexer::IndexService::new(memory.clone(), event_rx, watcher);
-    let server = SunbeamServer::new(memory, indexer.clone());
+        sunbeam_memory::indexer::IndexWatcher::new(event_tx).context("failed to create file watcher")?;
+    let indexer = sunbeam_memory::indexer::IndexService::new(memory.clone(), event_rx, watcher);
+    let core = CoreService::new(memory, indexer.clone());
+    let server = SunbeamServer::new(core);
     tokio::spawn(indexer.run());
 
     let service = server
@@ -54,16 +56,11 @@ async fn run_stdio() -> Result<()> {
     Ok(())
 }
 
-// ── HTTP REST server ──────────────────────────────────────────────────────────
+// ── HTTP server (axum + g2v) ──────────────────────────────────────────────────
 
 async fn run_http(args: HttpArgs) -> Result<()> {
-    use actix_web::{web, App, HttpServer};
-    use mcp_server::api::config::configure_api;
-    use mcp_server::api::mcp_http::{AuthConfig, build_mcp_service};
-    use mcp_server::api::oidc::OidcVerifier;
-
     let config = MemoryConfig::from_env();
-    eprintln!(
+    tracing::info!(
         "sunbeam-memory {}: loading model and opening store at {}…",
         env!("CARGO_PKG_VERSION"),
         config.base_dir
@@ -71,66 +68,32 @@ async fn run_http(args: HttpArgs) -> Result<()> {
 
     let (event_tx, event_rx) = crossbeam_channel::bounded(1000);
 
-    let auth_config = if let Some(issuer) = config.oidc_issuer.clone() {
-        eprintln!("  fetching OIDC JWKS from {issuer}…");
-        let verifier = OidcVerifier::new(&issuer, config.oidc_audience.clone())
-            .await
-            .with_context(|| format!("failed to fetch JWKS from {issuer}"))?;
-        eprintln!("  OIDC ready (issuer: {issuer})");
-        AuthConfig::Oidc(std::sync::Mutex::new(verifier))
-    } else if let Some(token) = config.auth_token.clone() {
-        AuthConfig::Bearer(token.clone())
-    } else {
-        AuthConfig::LocalOnly
-    };
-
-    let bind_addr = if auth_config.is_remote() {
-        "0.0.0.0"
-    } else {
-        "127.0.0.1"
-    };
-
-    match &auth_config {
-        AuthConfig::LocalOnly => {
-            eprintln!("sunbeam-memory ready (MCP HTTP on {bind_addr}:{}, localhost only)", args.port);
-            eprintln!("  MCP endpoint: http://127.0.0.1:{}/mcp", args.port);
-        }
-        AuthConfig::Bearer(tok) => {
-            eprintln!("sunbeam-memory ready (MCP HTTP on {bind_addr}:{}, bearer auth)", args.port);
-            eprintln!("  MCP endpoint: http://<your-host>:{}/mcp", args.port);
-            eprintln!("  Token:        {tok}");
-        }
-        AuthConfig::Oidc(_) => {
-            eprintln!("sunbeam-memory ready (MCP HTTP on {bind_addr}:{}, OIDC auth)", args.port);
-            eprintln!("  MCP endpoint: http://<your-host>:{}/mcp", args.port);
-        }
-    }
-
     let memory = init_memory(config).await?;
 
     let watcher =
-        mcp_server::indexer::IndexWatcher::new(event_tx).context("failed to create file watcher")?;
-    let indexer = mcp_server::indexer::IndexService::new(memory.clone(), event_rx, watcher);
-    let indexer_data = web::Data::new(indexer.clone());
-    let mcp_service = build_mcp_service(memory.clone(), indexer.clone());
+        sunbeam_memory::indexer::IndexWatcher::new(event_tx).context("failed to create file watcher")?;
+    let indexer = sunbeam_memory::indexer::IndexService::new(memory.clone(), event_rx, watcher);
     tokio::spawn(indexer.run());
 
-    let memory_data = web::Data::new(memory);
-    let auth = web::Data::new(auth_config);
-    let configure = configure_api(mcp_service);
+    let bind_addr: std::net::SocketAddr = format!("127.0.0.1:{}", args.port).parse()
+        .context("invalid bind address")?;
 
-    HttpServer::new(move || {
-        App::new()
-            .app_data(memory_data.clone())
-            .app_data(indexer_data.clone())
-            .app_data(auth.clone())
-            .configure(configure.clone())
-    })
-    .bind((bind_addr, args.port))
-    .with_context(|| format!("cannot bind {bind_addr}:{}", args.port))?
-    .run()
-    .await
-    .context("server error")?;
+    tracing::info!("sunbeam-memory ready (MCP HTTP on {bind_addr})");
+    tracing::info!("  MCP endpoint: http://{bind_addr}/mcp");
+
+    // TODO: wire up axum router with MCP + ConnectRPC + health + metrics
+    // This is a placeholder to allow compilation during the migration.
+    let listener = tokio::net::TcpListener::bind(bind_addr)
+        .await
+        .context("cannot bind")?;
+
+    // Minimal axum app — will be replaced with full router in Phase 2
+    let app = axum::Router::new()
+        .route("/", axum::routing::get(|| async { "sunbeam-memory" }));
+
+    axum::serve(listener, app)
+        .await
+        .context("server error")?;
 
     Ok(())
 }
