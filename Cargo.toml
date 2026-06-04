@@ -33,6 +33,10 @@ fastembed = "5.11.0"
 
 # Error handling
 thiserror = "1.0"
+anyhow = "1"
+
+# CLI parsing
+clap = { version = "4", features = ["derive"] }
 
 # HTTP server
 actix-web = "4"
@@ -63,6 +67,9 @@ gix = "0.70"
 
 # PDF text extraction
 pdf_oxide = "0.3.52"
+rmcp = { version = "1.7", features = ["server", "macros", "transport-io", "schemars"] }
+rmcp-actix-web = "0.12"
+schemars = "1.2.1"
 
 [dev-dependencies]
 serde_json = "1.0"
