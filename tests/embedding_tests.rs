@@ -1,4 +1,4 @@
-use mcp_server::embedding::service::{EmbeddingService, EmbeddingModelType};
+use sunbeam_memory::embedding::service::{EmbeddingService, EmbeddingModelType};
 
 #[tokio::test]
 async fn test_bge_base_english_model_works() {
@@ -35,8 +35,8 @@ async fn test_graphcodebert_model_works() {
 
 #[tokio::test]
 async fn test_model_switching_works() {
-    use mcp_server::memory::service::MemoryService;
-    use mcp_server::config::MemoryConfig;
+    use sunbeam_memory::memory::service::MemoryService;
+    use sunbeam_memory::config::MemoryConfig;
 
     let dir = tempfile::tempdir().unwrap();
     let config = MemoryConfig { base_dir: dir.path().to_str().unwrap().to_string(), ..Default::default() };
@@ -48,7 +48,7 @@ async fn test_model_switching_works() {
 
     assert_eq!(service.current_model().await, EmbeddingModelType::BgeBaseEnglish);
 
-    let switch_result: Result<(), mcp_server::error::ServerError> =
+    let switch_result: Result<(), sunbeam_memory::error::ServerError> =
         service.switch_model(EmbeddingModelType::CodeBert).await;
     assert!(switch_result.is_ok(), "Should be able to switch models");
 }

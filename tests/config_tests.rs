@@ -1,6 +1,6 @@
-use mcp_server::config::MemoryConfig;
-use mcp_server::error::ServerError;
-use mcp_server::embedding::service::EmbeddingError;
+use sunbeam_memory::config::MemoryConfig;
+use sunbeam_memory::error::ServerError;
+use sunbeam_memory::embedding::service::EmbeddingError;
 
 #[test]
 fn test_config_default() {

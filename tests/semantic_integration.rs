@@ -1,5 +1,5 @@
-use mcp_server::semantic::{SemanticConfig, SemanticStore};
-use mcp_server::embedding::service::{EmbeddingService, EmbeddingModelType};
+use sunbeam_memory::semantic::{SemanticConfig, SemanticStore};
+use sunbeam_memory::embedding::service::{EmbeddingService, EmbeddingModelType};
 
 #[tokio::test]
 async fn test_semantic_store_can_be_created() {
@@ -61,8 +61,8 @@ async fn test_semantic_store_can_add_and_search_facts() {
 
 #[tokio::test]
 async fn test_semantic_search_with_memory_service_integration() {
-    use mcp_server::memory::service::MemoryService;
-    use mcp_server::config::MemoryConfig;
+    use sunbeam_memory::memory::service::MemoryService;
+    use sunbeam_memory::config::MemoryConfig;
 
     let dir = tempfile::tempdir().unwrap();
     let memory_config = MemoryConfig { base_dir: dir.path().to_str().unwrap().to_string(), ..Default::default() };

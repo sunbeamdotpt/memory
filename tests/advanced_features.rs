@@ -1,5 +1,5 @@
-use mcp_server::semantic::store::SemanticStore;
-use mcp_server::semantic::SemanticConfig;
+use sunbeam_memory::semantic::store::SemanticStore;
+use sunbeam_memory::semantic::SemanticConfig;
 
 #[tokio::test]
 async fn test_fused_search_combines_bm25_and_vector() {
@@ -79,7 +79,7 @@ async fn test_fused_search_no_vector_matches() {
 
 #[tokio::test]
 async fn test_logging_in_unauthenticated_mode() {
-    use mcp_server::logging::FileLogger;
+    use sunbeam_memory::logging::FileLogger;
     use std::fs;
 
     let dir = tempfile::tempdir().unwrap();

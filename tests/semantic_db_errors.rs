@@ -1,5 +1,5 @@
-use mcp_server::semantic::db::SemanticDB;
-use mcp_server::semantic::{SemanticFact, SemanticConfig};
+use sunbeam_memory::semantic::db::SemanticDB;
+use sunbeam_memory::semantic::{SemanticFact, SemanticConfig};
 
 #[test]
 fn test_add_fact_dimension_mismatch() {

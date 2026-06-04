@@ -1,4 +1,4 @@
-use mcp_server::{
+use sunbeam_memory::{
     config::MemoryConfig,
     indexer::{IndexService, IndexWatcher},
     memory::service::MemoryService,

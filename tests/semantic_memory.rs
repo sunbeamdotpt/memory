@@ -1,5 +1,5 @@
-use mcp_server::memory::service::MemoryService;
-use mcp_server::config::MemoryConfig;
+use sunbeam_memory::memory::service::MemoryService;
+use sunbeam_memory::config::MemoryConfig;
 
 #[tokio::test]
 async fn test_memory_service_can_add_fact_to_semantic_memory() {
