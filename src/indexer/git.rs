@@ -1,5 +1,4 @@
 use crate::error::{Result, ServerError};
-use crate::urn::SourceUrn;
 use std::path::{Path, PathBuf};
 
 /// Resolved git state for a file inside a repository.
@@ -58,30 +57,6 @@ pub fn resolve_git_state(path: &Path) -> Result<Option<GitState>> {
         commit,
         repo_root,
     }))
-}
-
-/// Build a source URN for a file path, auto-detecting git repos.
-pub fn build_source_urn(path: &Path) -> Result<String> {
-    // Try git first
-    if let Some(git) = resolve_git_state(path)? {
-        let rel_path = path.strip_prefix(&git.repo_root)
-            .map_err(|_| ServerError::InvalidArgument("path not inside repo root".to_string()))?;
-        let rel_str = rel_path.to_string_lossy().replace('\\', "/");
-        return SourceUrn::build_git_urn(
-            &git.host,
-            git.org.as_deref(),
-            &git.repo,
-            &git.branch,
-            &rel_str,
-            None,
-        )
-        .map_err(|e| ServerError::InvalidArgument(e.to_string()));
-    }
-
-    // Fall back to fs URN
-    let abs = path.canonicalize()
-        .unwrap_or_else(|_| path.to_path_buf());
-    Ok(format!("urn:smem:code:fs:{}", abs.display()))
 }
 
 /// Parse a git remote URL into (host, org, repo).

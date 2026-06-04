@@ -6,6 +6,8 @@ pub mod semantic;
 pub mod logging;
 pub mod mcp;
 pub mod urn;
-pub mod api;
+
 pub mod paths;
 pub mod indexer;
+pub mod core;
+pub mod connect;
