@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] — 2026-06-15
+
+### Fixed
+
+- Wired HTTP mode to serve a real axum/ConnectRPC/MCP router and fixed ConnectRPC watch-target responses so `count`/`total` are populated.
+- Resolved all newly enabled clippy lints, including replacing `?` operators in `src/main.rs` with explicit error handling and removing `useless_vec`, `bool_assert_comparison`, and `await_holding_lock` warnings.
+- Corrected benchmark imports to use the current crate name `sunbeam_memory`.
+
+### Changed
+
+- Reached and maintained >90% unit and integration test coverage; removed placeholder `tests/memory_service.rs` stubs.
+
 ## [0.3.0] — 2026-06-04
 
 ### Added
