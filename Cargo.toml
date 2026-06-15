@@ -16,7 +16,7 @@ buffa-types = { version = "0.3", features = ["json"] }
 bytes = "1"
 chrono = "0.4"
 clap = { version = "4", features = ["derive"] }
-connectrpc = { version = "0.3", features = ["server", "streaming"] }
+connectrpc = { version = "0.3", features = ["server", "streaming", "axum"] }
 crossbeam-channel = "0.5"
 cxx = "1.0"
 dashmap = "6"

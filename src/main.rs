@@ -1,13 +1,16 @@
+use std::sync::Arc;
+
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 
+use rmcp::ServiceExt;
 use sunbeam_memory::{
     config::MemoryConfig,
+    connect::{memory_proto::sunbeam::memory::v1::MemoryServiceExt, service::MemoryConnectService},
     core::service::CoreService,
-    memory::service::MemoryService,
     mcp::server::SunbeamServer,
+    memory::service::MemoryService,
 };
-use rmcp::ServiceExt;
 
 #[derive(Parser, Debug)]
 #[command(name = "sunbeam-memory")]
@@ -35,18 +38,11 @@ struct HttpArgs {
 
 async fn run_stdio() -> Result<()> {
     let config = MemoryConfig::from_env();
-
-    let (event_tx, event_rx) = crossbeam_channel::bounded(1000);
-
-    let memory = init_memory(config).await?;
-
-    let watcher =
-        sunbeam_memory::indexer::IndexWatcher::new(event_tx).context("failed to create file watcher")?;
-    let indexer = sunbeam_memory::indexer::IndexService::new(memory.clone(), event_rx, watcher);
-    let core = CoreService::new(memory, indexer.clone());
-    let server = SunbeamServer::new(core);
+    let core = init_core(config).await?;
+    let indexer = core.indexer().clone();
     tokio::spawn(indexer.run());
 
+    let server = SunbeamServer::new(core);
     let service = server
         .serve(rmcp::transport::stdio())
         .await
@@ -56,7 +52,7 @@ async fn run_stdio() -> Result<()> {
     Ok(())
 }
 
-// ── HTTP server (axum + g2v) ──────────────────────────────────────────────────
+// ── HTTP server (axum + ConnectRPC + MCP Streamable HTTP) ─────────────────────
 
 async fn run_http(args: HttpArgs) -> Result<()> {
     let config = MemoryConfig::from_env();
@@ -66,44 +62,73 @@ async fn run_http(args: HttpArgs) -> Result<()> {
         config.base_dir
     );
 
-    let (event_tx, event_rx) = crossbeam_channel::bounded(1000);
-
-    let memory = init_memory(config).await?;
-
-    let watcher =
-        sunbeam_memory::indexer::IndexWatcher::new(event_tx).context("failed to create file watcher")?;
-    let indexer = sunbeam_memory::indexer::IndexService::new(memory.clone(), event_rx, watcher);
+    let core = init_core(config).await?;
+    let indexer = core.indexer().clone();
     tokio::spawn(indexer.run());
 
-    let bind_addr: std::net::SocketAddr = format!("127.0.0.1:{}", args.port).parse()
+    let bind_addr: std::net::SocketAddr = format!("127.0.0.1:{}", args.port)
+        .parse()
         .context("invalid bind address")?;
 
-    tracing::info!("sunbeam-memory ready (MCP HTTP on {bind_addr})");
-    tracing::info!("  MCP endpoint: http://{bind_addr}/mcp");
+    let app = build_http_app(core);
 
-    // TODO: wire up axum router with MCP + ConnectRPC + health + metrics
-    // This is a placeholder to allow compilation during the migration.
+    tracing::info!("sunbeam-memory ready (HTTP on {bind_addr})");
+    tracing::info!("  ConnectRPC base: http://{bind_addr}");
+    tracing::info!("  MCP endpoint:    http://{bind_addr}/mcp");
+
     let listener = tokio::net::TcpListener::bind(bind_addr)
         .await
         .context("cannot bind")?;
 
-    // Minimal axum app — will be replaced with full router in Phase 2
-    let app = axum::Router::new()
-        .route("/", axum::routing::get(|| async { "sunbeam-memory" }));
-
-    axum::serve(listener, app)
-        .await
-        .context("server error")?;
+    axum::serve(listener, app).await.context("server error")?;
 
     Ok(())
 }
 
+/// Build the axum application for HTTP mode.
+///
+/// Exposes the ConnectRPC `MemoryService` routes, an MCP Streamable HTTP
+/// endpoint at `/mcp`, and a simple root handler.
+pub fn build_http_app(core: CoreService) -> axum::Router {
+    // ConnectRPC adapter serves the generated MemoryService routes.
+    let connect_service = Arc::new(MemoryConnectService::new(core.clone()));
+    let connect_router = connect_service.register(connectrpc::Router::new());
+
+    // MCP Streamable HTTP transport at /mcp, backed by the same tool server
+    // that stdio mode uses.
+    let mcp_core = core.clone();
+    let session_manager = Arc::new(
+        rmcp::transport::streamable_http_server::session::local::LocalSessionManager::default(),
+    );
+    let mcp_service = rmcp::transport::streamable_http_server::StreamableHttpService::new(
+        move || Ok::<_, std::io::Error>(SunbeamServer::new(mcp_core.clone())),
+        session_manager,
+        rmcp::transport::streamable_http_server::StreamableHttpServerConfig::default(),
+    );
+
+    connect_router
+        .into_axum_router()
+        .route("/", axum::routing::get(|| async { "sunbeam-memory" }))
+        .route_service("/mcp", mcp_service)
+}
+
 // ── shared init ───────────────────────────────────────────────────────────────
 
-async fn init_memory(config: MemoryConfig) -> Result<MemoryService> {
-    MemoryService::new(&config)
-        .await
-        .with_context(|| format!("failed to initialise memory service (base_dir: {})", config.base_dir))
+pub(crate) async fn init_core(config: MemoryConfig) -> Result<CoreService> {
+    let (event_tx, event_rx) = crossbeam_channel::bounded(1000);
+
+    let memory = MemoryService::new(&config).await.with_context(|| {
+        format!(
+            "failed to initialise memory service (base_dir: {})",
+            config.base_dir
+        )
+    })?;
+
+    let watcher = sunbeam_memory::indexer::IndexWatcher::new(event_tx)
+        .context("failed to create file watcher")?;
+    let indexer = sunbeam_memory::indexer::IndexService::new(memory.clone(), event_rx, watcher);
+
+    Ok(CoreService::new(memory, indexer))
 }
 
 #[tokio::main(flavor = "multi_thread")]
@@ -113,5 +138,616 @@ async fn main() -> Result<()> {
     match cli.command {
         Some(Commands::Http(args)) => run_http(args).await,
         None => run_stdio().await,
+    }
+}
+
+// ── tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use axum::{body::Body, http::Request};
+    use http_body_util::BodyExt;
+    use serde_json::json;
+    use tower::ServiceExt;
+
+    use sunbeam_memory::{
+        config::MemoryConfig,
+        core::service::CoreService,
+        indexer::{IndexService, IndexWatcher},
+        memory::service::MemoryService,
+    };
+
+    use super::build_http_app;
+
+    async fn setup() -> (axum::Router, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let config = MemoryConfig {
+            base_dir: dir.path().to_str().unwrap().to_string(),
+            ..Default::default()
+        };
+        let memory = MemoryService::new(&config).await.unwrap();
+        let (dummy_tx, dummy_rx) = crossbeam_channel::bounded(1);
+        let watcher = IndexWatcher::new(dummy_tx).unwrap();
+        let indexer = IndexService::new(memory.clone(), dummy_rx, watcher);
+        let core = CoreService::new(memory, indexer);
+        (build_http_app(core), dir)
+    }
+
+    fn uint64_value(v: &serde_json::Value) -> u64 {
+        v.as_u64()
+            .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
+            .unwrap_or(0)
+    }
+
+    async fn send_json(
+        app: &axum::Router,
+        method: &str,
+        uri: &str,
+        body: serde_json::Value,
+    ) -> (http::StatusCode, serde_json::Value) {
+        let req = Request::builder()
+            .method(method)
+            .uri(uri)
+            .header("content-type", "application/json")
+            .header("accept", "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap();
+        let resp = app.clone().oneshot(req).await.unwrap();
+        let status = resp.status();
+        let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+        let json = serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
+        (status, json)
+    }
+
+    async fn body_text(resp: axum::response::Response<Body>) -> String {
+        let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+        String::from_utf8_lossy(&bytes).to_string()
+    }
+
+    #[tokio::test]
+    async fn test_root_handler() {
+        let (app, _dir) = setup().await;
+        let req = Request::builder().uri("/").body(Body::empty()).unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), http::StatusCode::OK);
+        assert_eq!(body_text(resp).await, "sunbeam-memory");
+    }
+
+    #[tokio::test]
+    async fn test_health_check() {
+        let (app, _dir) = setup().await;
+        let (status, json) = send_json(
+            &app,
+            "POST",
+            "/sunbeam.memory.v1.MemoryService/HealthCheck",
+            json!({}),
+        )
+        .await;
+        assert_eq!(status, http::StatusCode::OK);
+        assert_eq!(json["status"], "ok");
+        assert_eq!(json["version"], env!("CARGO_PKG_VERSION"));
+    }
+
+    #[tokio::test]
+    async fn test_store_fact() {
+        let (app, _dir) = setup().await;
+        let (status, json) = send_json(
+            &app,
+            "POST",
+            "/sunbeam.memory.v1.MemoryService/StoreFact",
+            json!({"content": "hello world", "namespace": "docs"}),
+        )
+        .await;
+        assert_eq!(status, http::StatusCode::OK);
+        assert!(!json["fact"]["id"].as_str().unwrap().is_empty());
+        assert_eq!(json["fact"]["namespace"], "docs");
+    }
+
+    #[tokio::test]
+    async fn test_store_fact_invalid_argument() {
+        let (app, _dir) = setup().await;
+        let (status, json) = send_json(
+            &app,
+            "POST",
+            "/sunbeam.memory.v1.MemoryService/StoreFact",
+            json!({"content": "   "}),
+        )
+        .await;
+        assert_eq!(status, http::StatusCode::BAD_REQUEST);
+        assert!(json["code"].as_str().unwrap().contains("invalid_argument"));
+    }
+
+    #[tokio::test]
+    async fn test_search_facts() {
+        let (app, _dir) = setup().await;
+        send_json(
+            &app,
+            "POST",
+            "/sunbeam.memory.v1.MemoryService/StoreFact",
+            json!({"content": "Rust programming language"}),
+        )
+        .await;
+        let (status, json) = send_json(
+            &app,
+            "POST",
+            "/sunbeam.memory.v1.MemoryService/SearchFacts",
+            json!({"query": "Rust", "limit": 5}),
+        )
+        .await;
+        assert_eq!(status, http::StatusCode::OK);
+        assert!(uint64_value(&json["total"]) > 0);
+    }
+
+    #[tokio::test]
+    async fn test_update_and_delete_fact() {
+        let (app, _dir) = setup().await;
+        let (_, store) = send_json(
+            &app,
+            "POST",
+            "/sunbeam.memory.v1.MemoryService/StoreFact",
+            json!({"content": "initial content"}),
+        )
+        .await;
+        let id = store["fact"]["id"].as_str().unwrap();
+
+        let (status, update) = send_json(
+            &app,
+            "POST",
+            "/sunbeam.memory.v1.MemoryService/UpdateFact",
+            json!({"id": id, "content": "updated content"}),
+        )
+        .await;
+        assert_eq!(status, http::StatusCode::OK);
+        assert_eq!(update["fact"]["content"], "updated content");
+
+        let (status, delete) = send_json(
+            &app,
+            "POST",
+            "/sunbeam.memory.v1.MemoryService/DeleteFact",
+            json!({"id": id}),
+        )
+        .await;
+        assert_eq!(status, http::StatusCode::OK);
+        assert!(delete["deleted"].as_bool().unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_list_facts() {
+        let (app, _dir) = setup().await;
+        send_json(
+            &app,
+            "POST",
+            "/sunbeam.memory.v1.MemoryService/StoreFact",
+            json!({"content": "fact one", "namespace": "ns1"}),
+        )
+        .await;
+        send_json(
+            &app,
+            "POST",
+            "/sunbeam.memory.v1.MemoryService/StoreFact",
+            json!({"content": "fact two", "namespace": "ns1"}),
+        )
+        .await;
+        let (status, json) = send_json(
+            &app,
+            "POST",
+            "/sunbeam.memory.v1.MemoryService/ListFacts",
+            json!({"namespace": "ns1"}),
+        )
+        .await;
+        assert_eq!(status, http::StatusCode::OK);
+        assert!(uint64_value(&json["total"]) >= 2);
+    }
+
+    #[tokio::test]
+    async fn test_urn_tools() {
+        let (app, _dir) = setup().await;
+        let (status, build) = send_json(
+            &app,
+            "POST",
+            "/sunbeam.memory.v1.MemoryService/BuildSourceUrn",
+            json!({"content_type": "code", "origin": "fs", "locator": "/tmp/main.rs", "fragment": "L10-L20"}),
+        )
+        .await;
+        assert_eq!(status, http::StatusCode::OK);
+        let urn = build["urn"].as_str().unwrap();
+        assert!(urn.contains("urn:smem:code:fs:/tmp/main.rs#L10-L20"));
+
+        let (status, parse) = send_json(
+            &app,
+            "POST",
+            "/sunbeam.memory.v1.MemoryService/ParseSourceUrn",
+            json!({"urn": urn}),
+        )
+        .await;
+        assert_eq!(status, http::StatusCode::OK);
+        assert!(parse["valid"].as_bool().unwrap());
+
+        let (status, schema) = send_json(
+            &app,
+            "POST",
+            "/sunbeam.memory.v1.MemoryService/DescribeUrnSchema",
+            json!({}),
+        )
+        .await;
+        assert_eq!(status, http::StatusCode::OK);
+        assert!(
+            schema["schemaJson"]
+                .as_str()
+                .unwrap()
+                .contains("content_types")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_watch_target_lifecycle() {
+        let (app, dir) = setup().await;
+        let path = dir.path().to_str().unwrap();
+        let (status, add) = send_json(
+            &app,
+            "POST",
+            "/sunbeam.memory.v1.MemoryService/AddWatchTarget",
+            json!({"path": path, "namespace": "default", "target_type": "directory"}),
+        )
+        .await;
+        assert_eq!(status, http::StatusCode::OK);
+        assert_eq!(add["targetIds"].as_array().unwrap().len(), 1);
+        let target_id = add["targetIds"][0].as_str().unwrap();
+
+        let (status, list) = send_json(
+            &app,
+            "POST",
+            "/sunbeam.memory.v1.MemoryService/ListWatchTargets",
+            json!({}),
+        )
+        .await;
+        assert_eq!(status, http::StatusCode::OK);
+        assert!(uint64_value(&list["total"]) > 0);
+
+        let (status, _progress) = send_json(
+            &app,
+            "POST",
+            "/sunbeam.memory.v1.MemoryService/GetIndexProgress",
+            json!({"target_id": target_id}),
+        )
+        .await;
+        assert_eq!(status, http::StatusCode::OK);
+
+        let (status, sync) = send_json(
+            &app,
+            "POST",
+            "/sunbeam.memory.v1.MemoryService/SyncWatchTarget",
+            json!({"target_id": target_id}),
+        )
+        .await;
+        assert_eq!(status, http::StatusCode::OK);
+        assert!(sync["started"].as_bool().unwrap());
+
+        let (status, remove) = send_json(
+            &app,
+            "POST",
+            "/sunbeam.memory.v1.MemoryService/RemoveWatchTarget",
+            json!({"target_id": target_id}),
+        )
+        .await;
+        assert_eq!(status, http::StatusCode::OK);
+        assert!(remove["removed"].as_bool().unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_errors_api() {
+        let (app, _dir) = setup().await;
+        let (status, list) = send_json(
+            &app,
+            "POST",
+            "/sunbeam.memory.v1.MemoryService/GetRecentErrors",
+            json!({}),
+        )
+        .await;
+        assert_eq!(status, http::StatusCode::OK);
+        assert!(
+            list.get("errors")
+                .map(|e| e.as_array().unwrap().is_empty())
+                .unwrap_or(true)
+        );
+
+        let (status, resolved) = send_json(
+            &app,
+            "POST",
+            "/sunbeam.memory.v1.MemoryService/ResolveError",
+            json!({"error_id": "01ABCDEF0123456789ABCDEF01"}),
+        )
+        .await;
+        assert_eq!(status, http::StatusCode::OK);
+        assert!(
+            !resolved
+                .get("resolved")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
+        );
+    }
+
+    #[tokio::test]
+    async fn test_mcp_initialize_streamable_http() {
+        let (app, _dir) = setup().await;
+        let body = json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-06-18",
+                "capabilities": {},
+                "clientInfo": {"name": "test", "version": "1.0"}
+            }
+        });
+        let req = Request::builder()
+            .method("POST")
+            .uri("http://127.0.0.1/mcp")
+            .header("content-type", "application/json")
+            .header("accept", "application/json, text/event-stream")
+            .body(Body::from(body.to_string()))
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), http::StatusCode::OK);
+        let text = body_text(resp).await;
+        assert!(text.contains("sunbeam-memory"));
+        assert!(text.contains("\"result\""));
+    }
+
+    #[tokio::test]
+    async fn test_mcp_requires_both_accept_mime_types() {
+        let (app, _dir) = setup().await;
+        let body = json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-06-18",
+                "capabilities": {},
+                "clientInfo": {"name": "test", "version": "1.0"}
+            }
+        });
+        let req = Request::builder()
+            .method("POST")
+            .uri("http://127.0.0.1/mcp")
+            .header("content-type", "application/json")
+            .header("accept", "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), http::StatusCode::NOT_ACCEPTABLE);
+    }
+
+    #[tokio::test]
+    async fn test_init_core() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = MemoryConfig {
+            base_dir: dir.path().to_str().unwrap().to_string(),
+            ..Default::default()
+        };
+        let core = crate::init_core(config).await.unwrap();
+        // Ensure the returned service is fully usable.
+        let _ = core.memory().embedding_service();
+    }
+
+    #[tokio::test]
+    async fn test_update_fact_not_found() {
+        let (app, _dir) = setup().await;
+        let (status, json) = send_json(
+            &app,
+            "POST",
+            "/sunbeam.memory.v1.MemoryService/UpdateFact",
+            json!({"id": "01ABCDEF0123456789ABCDEF01", "content": "updated"}),
+        )
+        .await;
+        assert_eq!(status, http::StatusCode::NOT_FOUND);
+        assert!(json["code"].as_str().unwrap().contains("not_found"));
+    }
+
+    #[tokio::test]
+    async fn test_search_facts_default_limit() {
+        let (app, _dir) = setup().await;
+        for i in 0..3 {
+            send_json(
+                &app,
+                "POST",
+                "/sunbeam.memory.v1.MemoryService/StoreFact",
+                json!({"content": format!("default limit fact {}", i), "namespace": "limits"}),
+            )
+            .await;
+        }
+        let (status, json) = send_json(
+            &app,
+            "POST",
+            "/sunbeam.memory.v1.MemoryService/SearchFacts",
+            json!({"query": "default limit", "limit": 0}),
+        )
+        .await;
+        assert_eq!(status, http::StatusCode::OK);
+        assert!(uint64_value(&json["total"]) >= 3);
+    }
+
+    #[tokio::test]
+    async fn test_list_facts_default_limit() {
+        let (app, _dir) = setup().await;
+        for i in 0..3 {
+            send_json(
+                &app,
+                "POST",
+                "/sunbeam.memory.v1.MemoryService/StoreFact",
+                json!({"content": format!("list default fact {}", i), "namespace": "listlimits"}),
+            )
+            .await;
+        }
+        let (status, json) = send_json(
+            &app,
+            "POST",
+            "/sunbeam.memory.v1.MemoryService/ListFacts",
+            json!({"namespace": "listlimits", "limit": 0}),
+        )
+        .await;
+        assert_eq!(status, http::StatusCode::OK);
+        assert!(uint64_value(&json["total"]) >= 3);
+    }
+
+    #[tokio::test]
+    async fn test_get_recent_errors_and_index_progress() {
+        let (app, _dir) = setup().await;
+
+        // Trigger a background indexer error so GetRecentErrors has something to return.
+        send_json(
+            &app,
+            "POST",
+            "/sunbeam.memory.v1.MemoryService/SyncWatchTarget",
+            json!({"target_id": "01ABCDEF0123456789ABCDEF01"}),
+        )
+        .await;
+
+        let mut found = false;
+        for _ in 0..50 {
+            let (status, json) = send_json(
+                &app,
+                "POST",
+                "/sunbeam.memory.v1.MemoryService/GetRecentErrors",
+                json!({"limit": 0}),
+            )
+            .await;
+            assert_eq!(status, http::StatusCode::OK);
+            if json["errors"]
+                .as_array()
+                .map(|a| !a.is_empty())
+                .unwrap_or(false)
+            {
+                found = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        assert!(found, "expected a logged indexer error");
+
+        // Call GetIndexProgress; conversion is exercised when progress is Some.
+        let (status, _json) = send_json(
+            &app,
+            "POST",
+            "/sunbeam.memory.v1.MemoryService/GetIndexProgress",
+            json!({"target_id": "01ABCDEF0123456789ABCDEF01"}),
+        )
+        .await;
+        assert_eq!(status, http::StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_restore_stale_fact_handler() {
+        let (app, _dir) = setup().await;
+        let (status, json) = send_json(
+            &app,
+            "POST",
+            "/sunbeam.memory.v1.MemoryService/RestoreStaleFact",
+            json!({"id": "01ABCDEF0123456789ABCDEF01"}),
+        )
+        .await;
+        assert_eq!(status, http::StatusCode::OK);
+        let restored = json
+            .get("restored")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        assert!(!restored);
+    }
+
+    #[tokio::test]
+    async fn test_init_core_failure_is_reported() {
+        let dir = tempfile::tempdir().unwrap();
+        // Create a file at the base_dir path so the store cannot create a directory there.
+        let bad_path = dir.path().join("not_a_dir");
+        std::fs::write(&bad_path, "").unwrap();
+        let config = MemoryConfig {
+            base_dir: bad_path.to_str().unwrap().to_string(),
+            ..Default::default()
+        };
+        let result = crate::init_core(config).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_list_facts_default_namespace() {
+        let (app, _dir) = setup().await;
+        send_json(
+            &app,
+            "POST",
+            "/sunbeam.memory.v1.MemoryService/StoreFact",
+            json!({"content": "namespace default test"}),
+        )
+        .await;
+        let (status, json) = send_json(
+            &app,
+            "POST",
+            "/sunbeam.memory.v1.MemoryService/ListFacts",
+            json!({"namespace": ""}),
+        )
+        .await;
+        assert_eq!(status, http::StatusCode::OK);
+        assert!(uint64_value(&json["total"]) >= 1);
+    }
+
+    #[tokio::test]
+    async fn test_search_facts_nonzero_limit() {
+        let (app, _dir) = setup().await;
+        for i in 0..3 {
+            send_json(
+                &app,
+                "POST",
+                "/sunbeam.memory.v1.MemoryService/StoreFact",
+                json!({"content": format!("limit fact {}", i), "namespace": "limitns"}),
+            )
+            .await;
+        }
+        let (status, json) = send_json(
+            &app,
+            "POST",
+            "/sunbeam.memory.v1.MemoryService/SearchFacts",
+            json!({"query": "limit fact", "limit": 2}),
+        )
+        .await;
+        assert_eq!(status, http::StatusCode::OK);
+        assert!(uint64_value(&json["total"]) >= 1);
+    }
+
+    #[tokio::test]
+    async fn test_list_facts_nonzero_limit() {
+        let (app, _dir) = setup().await;
+        for i in 0..3 {
+            send_json(
+                &app,
+                "POST",
+                "/sunbeam.memory.v1.MemoryService/StoreFact",
+                json!({"content": format!("list limit fact {}", i), "namespace": "listns"}),
+            )
+            .await;
+        }
+        let (status, json) = send_json(
+            &app,
+            "POST",
+            "/sunbeam.memory.v1.MemoryService/ListFacts",
+            json!({"namespace": "listns", "limit": 2}),
+        )
+        .await;
+        assert_eq!(status, http::StatusCode::OK);
+        assert!(uint64_value(&json["total"]) >= 1);
+    }
+
+    #[tokio::test]
+    async fn test_add_watch_target_default_namespace() {
+        let (app, dir) = setup().await;
+        let (status, json) = send_json(
+            &app,
+            "POST",
+            "/sunbeam.memory.v1.MemoryService/AddWatchTarget",
+            json!({"path": dir.path().to_str().unwrap(), "namespace": ""}),
+        )
+        .await;
+        assert_eq!(status, http::StatusCode::OK);
+        assert!(!json["targetIds"].as_array().unwrap().is_empty());
     }
 }

@@ -12,25 +12,17 @@ use crate::error::ServerError;
 
 // Generated proto types
 use crate::connect::memory_proto::sunbeam::memory::v1::{
-    AddWatchTargetRequestView, AddWatchTargetResponse,
-    BuildSourceUrnRequestView, BuildSourceUrnResponse,
-    DeleteFactRequestView, DeleteFactResponse,
-    DescribeUrnSchemaRequestView, DescribeUrnSchemaResponse,
-    ErrorEntry, Fact, GetIndexProgressRequestView, GetIndexProgressResponse,
-    GetRecentErrorsRequestView, GetRecentErrorsResponse,
-    HealthCheckRequestView, HealthCheckResponse,
-    IndexProgress, ListFactsRequestView, ListFactsResponse,
-    ListWatchTargetsRequestView, ListWatchTargetsResponse,
-    MemoryService,
-    ParseSourceUrnRequestView, ParseSourceUrnResponse,
-    RemoveWatchTargetRequestView, RemoveWatchTargetResponse,
-    ResolveErrorRequestView, ResolveErrorResponse,
-    RestoreStaleFactRequestView, RestoreStaleFactResponse,
-    SearchFactsRequestView, SearchFactsResponse,
-    StoreFactRequestView, StoreFactResponse,
-    SyncWatchTargetRequestView, SyncWatchTargetResponse,
-    UpdateFactRequestView, UpdateFactResponse,
-    WatchTarget,
+    AddWatchTargetRequestView, AddWatchTargetResponse, BuildSourceUrnRequestView,
+    BuildSourceUrnResponse, DeleteFactRequestView, DeleteFactResponse,
+    DescribeUrnSchemaRequestView, DescribeUrnSchemaResponse, ErrorEntry, Fact,
+    GetIndexProgressRequestView, GetIndexProgressResponse, GetRecentErrorsRequestView,
+    GetRecentErrorsResponse, HealthCheckRequestView, HealthCheckResponse, IndexProgress,
+    ListFactsRequestView, ListFactsResponse, ListWatchTargetsRequestView, ListWatchTargetsResponse,
+    MemoryService, ParseSourceUrnRequestView, ParseSourceUrnResponse, RemoveWatchTargetRequestView,
+    RemoveWatchTargetResponse, ResolveErrorRequestView, ResolveErrorResponse,
+    RestoreStaleFactRequestView, RestoreStaleFactResponse, SearchFactsRequestView,
+    SearchFactsResponse, StoreFactRequestView, StoreFactResponse, SyncWatchTargetRequestView,
+    SyncWatchTargetResponse, UpdateFactRequestView, UpdateFactResponse, WatchTarget,
 };
 
 /// ConnectRPC adapter for `sunbeam.memory.v1.MemoryService`.
@@ -92,7 +84,11 @@ impl MemoryService for MemoryConnectService {
         ctx: Context,
         req: buffa::view::OwnedView<SearchFactsRequestView<'static>>,
     ) -> Result<(SearchFactsResponse, Context), ConnectError> {
-        let limit = if req.limit == 0 { 10 } else { req.limit as usize };
+        let limit = if req.limit == 0 {
+            10
+        } else {
+            req.limit as usize
+        };
         let namespace = req.namespace.map(|s| s.to_string());
         let results = self
             .core
@@ -131,11 +127,7 @@ impl MemoryService for MemoryConnectService {
         ctx: Context,
         req: buffa::view::OwnedView<DeleteFactRequestView<'static>>,
     ) -> Result<(DeleteFactResponse, Context), ConnectError> {
-        let deleted = self
-            .core
-            .delete_fact(req.id)
-            .await
-            .map_err(map_error)?;
+        let deleted = self.core.delete_fact(req.id).await.map_err(map_error)?;
 
         let mut resp = DeleteFactResponse::default();
         resp.deleted = deleted;
@@ -152,7 +144,11 @@ impl MemoryService for MemoryConnectService {
         } else {
             req.namespace
         };
-        let limit = if req.limit == 0 { 50 } else { req.limit as usize };
+        let limit = if req.limit == 0 {
+            50
+        } else {
+            req.limit as usize
+        };
         let from = req.from.as_deref();
         let to = req.to.as_deref();
         let facts = self
@@ -187,8 +183,10 @@ impl MemoryService for MemoryConnectService {
             .await
             .map_err(map_error)?;
 
+        let count = ids.len() as u64;
         let mut resp = AddWatchTargetResponse::default();
         resp.target_ids = ids;
+        resp.count = count;
         Ok((resp, ctx))
     }
 
@@ -213,15 +211,13 @@ impl MemoryService for MemoryConnectService {
         ctx: Context,
         _req: buffa::view::OwnedView<ListWatchTargetsRequestView<'static>>,
     ) -> Result<(ListWatchTargetsResponse, Context), ConnectError> {
-        let targets = self
-            .core
-            .list_watch_targets()
-            .await
-            .map_err(map_error)?;
+        let targets = self.core.list_watch_targets().await.map_err(map_error)?;
 
+        let total = targets.len() as u64;
         let items: Vec<WatchTarget> = targets.into_iter().map(|t| t.into()).collect();
         let mut resp = ListWatchTargetsResponse::default();
         resp.targets = items;
+        resp.total = total;
         Ok((resp, ctx))
     }
 
@@ -256,10 +252,7 @@ impl MemoryService for MemoryConnectService {
         ctx: Context,
         req: buffa::view::OwnedView<RestoreStaleFactRequestView<'static>>,
     ) -> Result<(RestoreStaleFactResponse, Context), ConnectError> {
-        let restored = self
-            .core
-            .restore_stale_fact(req.id)
-            .map_err(map_error)?;
+        let restored = self.core.restore_stale_fact(req.id).map_err(map_error)?;
 
         let mut resp = RestoreStaleFactResponse::default();
         resp.restored = restored;
@@ -286,19 +279,34 @@ impl MemoryService for MemoryConnectService {
         ctx: Context,
         req: buffa::view::OwnedView<ParseSourceUrnRequestView<'static>>,
     ) -> Result<(ParseSourceUrnResponse, Context), ConnectError> {
-        let json = self
-            .core
-            .parse_source_urn(req.urn)
-            .map_err(map_error)?;
+        let json = self.core.parse_source_urn(req.urn).map_err(map_error)?;
 
         let mut resp = ParseSourceUrnResponse::default();
         resp.valid = json.get("valid").and_then(|v| v.as_bool()).unwrap_or(false);
-        resp.content_type = json.get("content_type").and_then(|v| v.as_str()).map(|s| s.to_string());
-        resp.origin = json.get("origin").and_then(|v| v.as_str()).map(|s| s.to_string());
-        resp.locator = json.get("locator").and_then(|v| v.as_str()).map(|s| s.to_string());
-        resp.fragment = json.get("fragment").and_then(|v| v.as_str()).map(|s| s.to_string());
-        resp.human_readable = json.get("human_readable").and_then(|v| v.as_str()).map(|s| s.to_string());
-        resp.error = json.get("error").and_then(|v| v.as_str()).map(|s| s.to_string());
+        resp.content_type = json
+            .get("content_type")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        resp.origin = json
+            .get("origin")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        resp.locator = json
+            .get("locator")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        resp.fragment = json
+            .get("fragment")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        resp.human_readable = json
+            .get("human_readable")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        resp.error = json
+            .get("error")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
         Ok((resp, ctx))
     }
 
@@ -307,10 +315,7 @@ impl MemoryService for MemoryConnectService {
         ctx: Context,
         _req: buffa::view::OwnedView<DescribeUrnSchemaRequestView<'static>>,
     ) -> Result<(DescribeUrnSchemaResponse, Context), ConnectError> {
-        let json = self
-            .core
-            .describe_urn_schema()
-            .map_err(map_error)?;
+        let json = self.core.describe_urn_schema().map_err(map_error)?;
 
         let mut resp = DescribeUrnSchemaResponse::default();
         resp.schema_json = json.to_string();
@@ -323,7 +328,11 @@ impl MemoryService for MemoryConnectService {
         req: buffa::view::OwnedView<GetRecentErrorsRequestView<'static>>,
     ) -> Result<(GetRecentErrorsResponse, Context), ConnectError> {
         let component = req.component;
-        let limit = if req.limit == 0 { 10 } else { req.limit as usize };
+        let limit = if req.limit == 0 {
+            10
+        } else {
+            req.limit as usize
+        };
         let entries = self
             .core
             .get_recent_errors(component, limit)
@@ -425,5 +434,62 @@ impl From<crate::core::service::ErrorEntry> for ErrorEntry {
             __buffa_unknown_fields: buffa::UnknownFields::default(),
             __buffa_cached_size: buffa::__private::CachedSize::default(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn map_error_codes() {
+        let not_found = map_error(ServerError::NotFound("missing".to_string()));
+        assert_eq!(not_found.code, ErrorCode::NotFound);
+
+        let invalid = map_error(ServerError::InvalidArgument("bad".to_string()));
+        assert_eq!(invalid.code, ErrorCode::InvalidArgument);
+
+        let internal = map_error(ServerError::DatabaseError("boom".to_string()));
+        assert_eq!(internal.code, ErrorCode::Internal);
+    }
+
+    #[test]
+    fn index_progress_conversion() {
+        let progress = crate::indexer::TargetProgress {
+            files_total: 10,
+            files_pending: 5,
+            files_processing: 2,
+            files_completed: 3,
+            files_failed: 1,
+            current_file: Some("main.rs".to_string()),
+            last_error: Some("oops".to_string()),
+        };
+        let proto = IndexProgress::from(progress);
+        assert_eq!(proto.files_total, 10);
+        assert_eq!(proto.files_pending, 5);
+        assert_eq!(proto.files_processing, 2);
+        assert_eq!(proto.files_completed, 3);
+        assert_eq!(proto.files_failed, 1);
+        assert_eq!(proto.current_file.as_deref(), Some("main.rs"));
+        assert_eq!(proto.last_error.as_deref(), Some("oops"));
+    }
+
+    #[test]
+    fn error_entry_conversion() {
+        let entry = crate::core::service::ErrorEntry {
+            error_id: "err-1".to_string(),
+            timestamp: 1234567890,
+            component: "test".to_string(),
+            severity: "warn".to_string(),
+            message: "hello".to_string(),
+            details: Some("details".to_string()),
+        };
+        let proto = ErrorEntry::from(entry);
+        assert_eq!(proto.error_id, "err-1");
+        assert_eq!(proto.timestamp, 1234567890);
+        assert_eq!(proto.component, "test");
+        assert_eq!(proto.severity, "warn");
+        assert_eq!(proto.message, "hello");
+        assert_eq!(proto.details.as_deref(), Some("details"));
     }
 }

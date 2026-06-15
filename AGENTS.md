@@ -23,7 +23,7 @@ The server exposes an MCP (Model Context Protocol) interface over **stdio** (loc
 | Mode | Trigger | Transport | Auth |
 |------|---------|-----------|------|
 | stdio (default) | no subcommand | stdin/stdout MCP | none (localhost only) |
-| HTTP | `http --port <PORT>` | Streamable HTTP `/mcp` + REST endpoints | `MCP_AUTH_TOKEN` bearer or OIDC JWT |
+| HTTP | `http --port <PORT>` | Streamable HTTP `/mcp` + ConnectRPC (`axum`) | none (localhost only) |
 
 ---
 
@@ -32,10 +32,10 @@ The server exposes an MCP (Model Context Protocol) interface over **stdio** (loc
 | Layer | Crate / Tool | Purpose |
 |-------|--------------|---------|
 | Async runtime | `tokio` (full features) | Async I/O, spawning tasks |
-| HTTP server | `actix-web` | REST API and MCP HTTP transport |
+| HTTP server | `axum` | HTTP server for MCP Streamable HTTP and ConnectRPC |
 | MCP protocol | `rmcp` | Native Rust MCP SDK (stdio + Streamable HTTP) |
-| MCP actix-web | `rmcp-actix-web` | Streamable HTTP transport for actix-web |
-| Serialization | `serde`, `serde_json` | JSON-RPC and REST payloads |
+| ConnectRPC | `connectrpc` | Protobuf/JSON RPC service (`sunbeam.memory.v1.MemoryService`) |
+| Serialization | `serde`, `serde_json` | JSON-RPC and ConnectRPC JSON payloads |
 | Database | `rusqlite` (bundled) | SQLite persistence, FTS5 |
 | Vector search | `usearch` | HNSW ANN index (cosine similarity) |
 | Embeddings | `fastembed` | Local ONNX embedding models |
@@ -247,16 +247,24 @@ cargo clean
 ```
 Claude / MCP client
       │
-      │  stdio (local)  or  HTTP POST /mcp  (remote)
+      │  stdio (local)  or  HTTP Streamable HTTP /mcp  (remote)
       ▼
  mcp/server.rs        ← JSON-RPC dispatch, tool handlers
       │
- memory/service.rs    ← embed content, business logic
+ Other clients / scripts
       │
- semantic/store.rs    ← HNSW vector search (usearch)
- semantic/db.rs       ← SQLite persistence (facts + FTS5 + errors + index blob)
+      │  HTTP ConnectRPC /sunbeam.memory.v1.MemoryService/*  (remote)
+      ▼
+ connect/service.rs    ← ConnectRPC adapter to CoreService
       │
- indexer/             ← file watcher, PDF extractor, git scanner
+ core/service.rs       ← shared business logic
+      │
+ memory/service.rs     ← embed content, fact CRUD
+      │
+ semantic/store.rs     ← HNSW vector search (usearch)
+ semantic/db.rs        ← SQLite persistence (facts + FTS5 + errors + index blob)
+      │
+ indexer/              ← file watcher, PDF extractor, git scanner
 ```
 
 **Search strategy:** `MemoryService::search_facts` performs a **fused BM25 + vector search** via Reciprocal Rank Fusion (RRF). The `score` field in results is the RRF score, not raw cosine similarity.
