@@ -209,7 +209,7 @@ impl CoreService {
         let store = self.memory.get_store();
         let db = store.db();
         let db_guard = db.lock().unwrap();
-        db_guard.restore_fact(id).map_err(ServerError::from)
+        db_guard.restore_fact(id)
     }
 
     // ── URN ────────────────────────────────────────────────────────────────────

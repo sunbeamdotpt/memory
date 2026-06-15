@@ -227,12 +227,12 @@ impl SourceUrn {
         if locator.is_empty() {
             return Err(UrnError("locator must not be empty".to_string()));
         }
-        if let Some(f) = fragment {
-            if f.is_empty() {
-                return Err(UrnError(
-                    "fragment must not be empty if provided".to_string(),
-                ));
-            }
+        if let Some(f) = fragment
+            && f.is_empty()
+        {
+            return Err(UrnError(
+                "fragment must not be empty if provided".to_string(),
+            ));
         }
         let urn = Self {
             content_type: ContentType::parse(content_type_str)?,
@@ -253,7 +253,7 @@ impl SourceUrn {
 
         // Fragment splits on the first '#'; the fragment may itself contain '#'.
         let (body, fragment) = match rest.split_once('#') {
-            Some((_b, f)) if f.is_empty() => {
+            Some((_, "")) => {
                 return Err(UrnError("fragment after '#' must not be empty".to_string()));
             }
             Some((b, f)) => (b, Some(f.to_string())),
@@ -348,10 +348,10 @@ impl SourceUrn {
 
         // Validate required components are not empty
         // parts[0] = host, parts[2] = repo, parts[3] = branch, parts[4..] = path
-        parts[0].is_empty() == false
-            && parts[2].is_empty() == false
-            && parts[3].is_empty() == false
-            && parts[4..].join(":").is_empty() == false
+        !parts[0].is_empty()
+            && !parts[2].is_empty()
+            && !parts[3].is_empty()
+            && !parts[4..].join(":").is_empty()
     }
 
     /// Extract host from git locator (ARN-like format: host:org:repo:branch:path)

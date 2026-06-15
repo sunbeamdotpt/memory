@@ -44,5 +44,5 @@ async fn test_memory_service_handles_errors() {
     // Deleting a non-existent fact should return Ok(false), not an error
     let result = service.delete_fact("non-existent-id").await;
     assert!(result.is_ok(), "Should handle missing fact gracefully");
-    assert_eq!(result.unwrap(), false);
+    assert!(!result.unwrap());
 }

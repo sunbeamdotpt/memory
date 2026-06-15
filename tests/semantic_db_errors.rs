@@ -25,7 +25,7 @@ fn test_add_fact_dimension_mismatch() {
 fn test_search_similar_dimension_mismatch() {
     let dir = tempfile::tempdir().unwrap();
     let db = SemanticDB::new(dir.path().to_str().unwrap(), 768).unwrap();
-    let result = db.search_similar(&vec![0.0; 10], 5, None);
+    let result = db.search_similar(&[0.0; 10], 5, None);
     assert!(result.is_err());
     let err = result.unwrap_err().to_string();
     assert!(err.contains("dimension"));
@@ -35,7 +35,7 @@ fn test_search_similar_dimension_mismatch() {
 fn test_fused_search_dimension_mismatch() {
     let dir = tempfile::tempdir().unwrap();
     let db = SemanticDB::new(dir.path().to_str().unwrap(), 768).unwrap();
-    let result = db.fused_search("fox", &vec![0.0; 10], 5, None);
+    let result = db.fused_search("fox", &[0.0; 10], 5, None);
     assert!(result.is_err());
     let err = result.unwrap_err().to_string();
     assert!(err.contains("dimension"));
@@ -45,7 +45,7 @@ fn test_fused_search_dimension_mismatch() {
 fn test_update_fact_dimension_mismatch() {
     let dir = tempfile::tempdir().unwrap();
     let mut db = SemanticDB::new(dir.path().to_str().unwrap(), 768).unwrap();
-    let result = db.update_fact("id", "content", None, &vec![0.0; 10]);
+    let result = db.update_fact("id", "content", None, &[0.0; 10]);
     assert!(result.is_err());
     let err = result.unwrap_err().to_string();
     assert!(err.contains("dimension"));
@@ -55,7 +55,7 @@ fn test_update_fact_dimension_mismatch() {
 fn test_insert_vec_dimension_mismatch() {
     let dir = tempfile::tempdir().unwrap();
     let mut db = SemanticDB::new(dir.path().to_str().unwrap(), 768).unwrap();
-    let result = db.insert_vec("id", &vec![0.0; 10]);
+    let result = db.insert_vec("id", &[0.0; 10]);
     assert!(result.is_err());
     let err = result.unwrap_err().to_string();
     assert!(err.contains("dimension"));
@@ -182,7 +182,7 @@ fn test_update_fact_nonexistent() {
     let dir = tempfile::tempdir().unwrap();
     let mut db = SemanticDB::new(dir.path().to_str().unwrap(), 768).unwrap();
     let result = db
-        .update_fact("non-existent", "content", None, &vec![0.0; 768])
+        .update_fact("non-existent", "content", None, &[0.0; 768])
         .unwrap();
     assert!(!result);
 }

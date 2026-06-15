@@ -51,18 +51,27 @@ struct HttpArgs {
 
 async fn run_stdio() -> Result<()> {
     let config = MemoryConfig::from_env();
-    let core = init_core(config).await?;
+    let core = match init_core(config).await {
+        Ok(c) => c,
+        Err(e) => return Err(e),
+    };
     let indexer = core.indexer().clone();
     tokio::spawn(indexer.run());
 
     let server = SunbeamServer::new(core);
-    let service = server
+    let service = match server
         .serve(rmcp::transport::stdio())
         .await
-        .context("failed to start MCP service")?;
+        .context("failed to start MCP service")
+    {
+        Ok(s) => s,
+        Err(e) => return Err(e),
+    };
 
-    service.waiting().await?;
-    Ok(())
+    match service.waiting().await {
+        Ok(_) => Ok(()),
+        Err(e) => Err(anyhow::Error::from(e)),
+    }
 }
 
 // ── HTTP server (axum + ConnectRPC + MCP Streamable HTTP) ─────────────────────
@@ -75,13 +84,20 @@ async fn run_http(args: HttpArgs) -> Result<()> {
         config.base_dir
     );
 
-    let core = init_core(config).await?;
+    let core = match init_core(config).await {
+        Ok(c) => c,
+        Err(e) => return Err(e),
+    };
     let indexer = core.indexer().clone();
     tokio::spawn(indexer.run());
 
-    let bind_addr: std::net::SocketAddr = format!("127.0.0.1:{}", args.port)
+    let bind_addr: std::net::SocketAddr = match format!("127.0.0.1:{}", args.port)
         .parse()
-        .context("invalid bind address")?;
+        .context("invalid bind address")
+    {
+        Ok(a) => a,
+        Err(e) => return Err(e),
+    };
 
     let app = build_http_app(core);
 
@@ -89,13 +105,18 @@ async fn run_http(args: HttpArgs) -> Result<()> {
     tracing::info!("  ConnectRPC base: http://{bind_addr}");
     tracing::info!("  MCP endpoint:    http://{bind_addr}/mcp");
 
-    let listener = tokio::net::TcpListener::bind(bind_addr)
+    let listener = match tokio::net::TcpListener::bind(bind_addr)
         .await
-        .context("cannot bind")?;
+        .context("cannot bind")
+    {
+        Ok(l) => l,
+        Err(e) => return Err(e),
+    };
 
-    axum::serve(listener, app).await.context("server error")?;
-
-    Ok(())
+    match axum::serve(listener, app).await.context("server error") {
+        Ok(()) => Ok(()),
+        Err(e) => Err(e),
+    }
 }
 
 /// Build the axum application for HTTP mode.
@@ -130,15 +151,22 @@ pub fn build_http_app(core: CoreService) -> axum::Router {
 pub(crate) async fn init_core(config: MemoryConfig) -> Result<CoreService> {
     let (event_tx, event_rx) = crossbeam_channel::bounded(1000);
 
-    let memory = MemoryService::new(&config).await.with_context(|| {
+    let memory = match MemoryService::new(&config).await.with_context(|| {
         format!(
             "failed to initialise memory service (base_dir: {})",
             config.base_dir
         )
-    })?;
+    }) {
+        Ok(m) => m,
+        Err(e) => return Err(e),
+    };
 
-    let watcher = sunbeam_memory::indexer::IndexWatcher::new(event_tx)
-        .context("failed to create file watcher")?;
+    let watcher = match sunbeam_memory::indexer::IndexWatcher::new(event_tx)
+        .context("failed to create file watcher")
+    {
+        Ok(w) => w,
+        Err(e) => return Err(e),
+    };
     let indexer = sunbeam_memory::indexer::IndexService::new(memory.clone(), event_rx, watcher);
 
     Ok(CoreService::new(memory, indexer))

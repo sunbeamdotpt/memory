@@ -238,9 +238,10 @@ async fn test_add_watch_target_initial_sync_failure_path() {
     // and log the initial-sync failure path.
     let store = core.memory().get_store();
     let db = store.db();
-    let db_guard = db.lock().unwrap();
-    assert!(db_guard.delete_ingestion_target(&target_id).unwrap());
-    drop(db_guard);
+    {
+        let db_guard = db.lock().unwrap();
+        assert!(db_guard.delete_ingestion_target(&target_id).unwrap());
+    }
 
     let entry = wait_for_error(&core, |e| {
         e.component == "indexer" && e.message.contains("initial sync failed for target")

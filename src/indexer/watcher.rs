@@ -46,7 +46,7 @@ impl IndexWatcher {
 
         // Find matching target(s) for each affected path
         for path in &event.paths {
-            for (_target_id, target_path) in guard.iter() {
+            for target_path in guard.values() {
                 if path.starts_with(target_path) {
                     let evt = match kind {
                         "create" => IngestionEvent::Create(path.clone()),

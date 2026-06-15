@@ -99,9 +99,11 @@ impl MemoryService for MemoryConnectService {
         let total = results.len() as u64;
         let facts: Vec<Fact> = results.iter().map(|f| f.into()).collect();
 
-        let mut resp = SearchFactsResponse::default();
-        resp.results = facts;
-        resp.total = total;
+        let resp = SearchFactsResponse {
+            results: facts,
+            total,
+            ..Default::default()
+        };
         Ok((resp, ctx))
     }
 
@@ -129,8 +131,10 @@ impl MemoryService for MemoryConnectService {
     ) -> Result<(DeleteFactResponse, Context), ConnectError> {
         let deleted = self.core.delete_fact(req.id).await.map_err(map_error)?;
 
-        let mut resp = DeleteFactResponse::default();
-        resp.deleted = deleted;
+        let resp = DeleteFactResponse {
+            deleted,
+            ..Default::default()
+        };
         Ok((resp, ctx))
     }
 
@@ -149,20 +153,20 @@ impl MemoryService for MemoryConnectService {
         } else {
             req.limit as usize
         };
-        let from = req.from.as_deref();
-        let to = req.to.as_deref();
         let facts = self
             .core
-            .list_facts(namespace, limit, from, to)
+            .list_facts(namespace, limit, req.from, req.to)
             .await
             .map_err(map_error)?;
 
         let total = facts.len() as u64;
         let items: Vec<Fact> = facts.iter().map(|f| f.into()).collect();
 
-        let mut resp = ListFactsResponse::default();
-        resp.facts = items;
-        resp.total = total;
+        let resp = ListFactsResponse {
+            facts: items,
+            total,
+            ..Default::default()
+        };
         Ok((resp, ctx))
     }
 
@@ -184,9 +188,11 @@ impl MemoryService for MemoryConnectService {
             .map_err(map_error)?;
 
         let count = ids.len() as u64;
-        let mut resp = AddWatchTargetResponse::default();
-        resp.target_ids = ids;
-        resp.count = count;
+        let resp = AddWatchTargetResponse {
+            target_ids: ids,
+            count,
+            ..Default::default()
+        };
         Ok((resp, ctx))
     }
 
@@ -201,8 +207,10 @@ impl MemoryService for MemoryConnectService {
             .await
             .map_err(map_error)?;
 
-        let mut resp = RemoveWatchTargetResponse::default();
-        resp.removed = removed;
+        let resp = RemoveWatchTargetResponse {
+            removed,
+            ..Default::default()
+        };
         Ok((resp, ctx))
     }
 
@@ -215,9 +223,11 @@ impl MemoryService for MemoryConnectService {
 
         let total = targets.len() as u64;
         let items: Vec<WatchTarget> = targets.into_iter().map(|t| t.into()).collect();
-        let mut resp = ListWatchTargetsResponse::default();
-        resp.targets = items;
-        resp.total = total;
+        let resp = ListWatchTargetsResponse {
+            targets: items,
+            total,
+            ..Default::default()
+        };
         Ok((resp, ctx))
     }
 
@@ -230,8 +240,10 @@ impl MemoryService for MemoryConnectService {
             .sync_watch_target(req.target_id)
             .map_err(map_error)?;
 
-        let mut resp = SyncWatchTargetResponse::default();
-        resp.started = true;
+        let resp = SyncWatchTargetResponse {
+            started: true,
+            ..Default::default()
+        };
         Ok((resp, ctx))
     }
 
@@ -254,8 +266,10 @@ impl MemoryService for MemoryConnectService {
     ) -> Result<(RestoreStaleFactResponse, Context), ConnectError> {
         let restored = self.core.restore_stale_fact(req.id).map_err(map_error)?;
 
-        let mut resp = RestoreStaleFactResponse::default();
-        resp.restored = restored;
+        let resp = RestoreStaleFactResponse {
+            restored,
+            ..Default::default()
+        };
         Ok((resp, ctx))
     }
 
@@ -269,8 +283,10 @@ impl MemoryService for MemoryConnectService {
             .build_source_urn(req.content_type, req.origin, req.locator, req.fragment)
             .map_err(map_error)?;
 
-        let mut resp = BuildSourceUrnResponse::default();
-        resp.urn = urn;
+        let resp = BuildSourceUrnResponse {
+            urn,
+            ..Default::default()
+        };
         Ok((resp, ctx))
     }
 
@@ -281,32 +297,34 @@ impl MemoryService for MemoryConnectService {
     ) -> Result<(ParseSourceUrnResponse, Context), ConnectError> {
         let json = self.core.parse_source_urn(req.urn).map_err(map_error)?;
 
-        let mut resp = ParseSourceUrnResponse::default();
-        resp.valid = json.get("valid").and_then(|v| v.as_bool()).unwrap_or(false);
-        resp.content_type = json
-            .get("content_type")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
-        resp.origin = json
-            .get("origin")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
-        resp.locator = json
-            .get("locator")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
-        resp.fragment = json
-            .get("fragment")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
-        resp.human_readable = json
-            .get("human_readable")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
-        resp.error = json
-            .get("error")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
+        let resp = ParseSourceUrnResponse {
+            valid: json.get("valid").and_then(|v| v.as_bool()).unwrap_or(false),
+            content_type: json
+                .get("content_type")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
+            origin: json
+                .get("origin")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
+            locator: json
+                .get("locator")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
+            fragment: json
+                .get("fragment")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
+            human_readable: json
+                .get("human_readable")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
+            error: json
+                .get("error")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
+            ..Default::default()
+        };
         Ok((resp, ctx))
     }
 
@@ -317,8 +335,10 @@ impl MemoryService for MemoryConnectService {
     ) -> Result<(DescribeUrnSchemaResponse, Context), ConnectError> {
         let json = self.core.describe_urn_schema().map_err(map_error)?;
 
-        let mut resp = DescribeUrnSchemaResponse::default();
-        resp.schema_json = json.to_string();
+        let resp = DescribeUrnSchemaResponse {
+            schema_json: json.to_string(),
+            ..Default::default()
+        };
         Ok((resp, ctx))
     }
 
@@ -340,8 +360,10 @@ impl MemoryService for MemoryConnectService {
             .map_err(map_error)?;
 
         let items: Vec<ErrorEntry> = entries.into_iter().map(|e| e.into()).collect();
-        let mut resp = GetRecentErrorsResponse::default();
-        resp.errors = items;
+        let resp = GetRecentErrorsResponse {
+            errors: items,
+            ..Default::default()
+        };
         Ok((resp, ctx))
     }
 
@@ -356,8 +378,10 @@ impl MemoryService for MemoryConnectService {
             .await
             .map_err(map_error)?;
 
-        let mut resp = ResolveErrorResponse::default();
-        resp.resolved = resolved;
+        let resp = ResolveErrorResponse {
+            resolved,
+            ..Default::default()
+        };
         Ok((resp, ctx))
     }
 
@@ -366,9 +390,11 @@ impl MemoryService for MemoryConnectService {
         ctx: Context,
         _req: buffa::view::OwnedView<HealthCheckRequestView<'static>>,
     ) -> Result<(HealthCheckResponse, Context), ConnectError> {
-        let mut resp = HealthCheckResponse::default();
-        resp.status = "ok".to_string();
-        resp.version = env!("CARGO_PKG_VERSION").to_string();
+        let resp = HealthCheckResponse {
+            status: "ok".to_string(),
+            version: env!("CARGO_PKG_VERSION").to_string(),
+            ..Default::default()
+        };
         Ok((resp, ctx))
     }
 }

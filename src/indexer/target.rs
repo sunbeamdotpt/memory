@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::str::FromStr;
 
 /// A filesystem path or directory that the indexer should watch and ingest.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -29,13 +30,17 @@ impl TargetType {
             TargetType::GitRepo => "git_repo",
         }
     }
+}
 
-    pub fn from_str(s: &str) -> Option<Self> {
+impl FromStr for TargetType {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "file" => Some(TargetType::File),
-            "directory" => Some(TargetType::Directory),
-            "git_repo" => Some(TargetType::GitRepo),
-            _ => None,
+            "file" => Ok(TargetType::File),
+            "directory" => Ok(TargetType::Directory),
+            "git_repo" => Ok(TargetType::GitRepo),
+            _ => Err(format!("unknown target type: {s}")),
         }
     }
 }

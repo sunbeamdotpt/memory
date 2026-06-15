@@ -5,7 +5,11 @@ use crate::semantic::SemanticFact;
 use rusqlite::{Connection, OptionalExtension, params};
 use std::collections::HashMap;
 use std::path::Path;
+use std::str::FromStr;
 use ulid::Ulid;
+
+type IndexLoadResult = (usearch::Index, HashMap<u64, String>, HashMap<String, u64>);
+type ErrorLogRow = (String, i64, String, String, String, Option<String>);
 
 /// SQLite-based semantic fact storage with USearch HNSW vector indexing.
 pub struct SemanticDB {
@@ -193,17 +197,16 @@ impl SemanticDB {
     }
 
     /// Load an existing USearch index from SQLite blob, or create a fresh one.
-    fn load_or_create_index(
-        conn: &Connection,
-        dimension: usize,
-    ) -> Result<(usearch::Index, HashMap<u64, String>, HashMap<String, u64>)> {
-        let mut options = usearch::IndexOptions::default();
-        options.dimensions = dimension;
-        options.metric = usearch::MetricKind::Cos;
-        options.quantization = usearch::ScalarKind::F32;
-        options.connectivity = 16;
-        options.expansion_add = 40;
-        options.expansion_search = 16;
+    fn load_or_create_index(conn: &Connection, dimension: usize) -> Result<IndexLoadResult> {
+        let options = usearch::IndexOptions {
+            dimensions: dimension,
+            metric: usearch::MetricKind::Cos,
+            quantization: usearch::ScalarKind::F32,
+            connectivity: 16,
+            expansion_add: 40,
+            expansion_search: 16,
+            ..Default::default()
+        };
 
         let index = usearch::new_index(&options)?;
 
@@ -213,10 +216,8 @@ impl SemanticDB {
             })
             .optional()?;
 
-        if let Some(data) = blob {
-            if !data.is_empty() {
-                index.load_from_buffer(&data)?;
-            }
+        if let Some(data) = blob.filter(|d| !d.is_empty()) {
+            index.load_from_buffer(&data)?;
         }
 
         // Reserve capacity after loading — load_from_buffer overwrites reservations.
@@ -479,10 +480,10 @@ impl SemanticDB {
                 None => continue,
             };
 
-            if let Some(ns) = namespace_filter {
-                if fact.namespace != ns {
-                    continue;
-                }
+            if let Some(ns) = namespace_filter
+                && fact.namespace != ns
+            {
+                continue;
             }
 
             // USearch Cos metric returns distance; convert to similarity score
@@ -532,13 +533,10 @@ impl SemanticDB {
                     source: row.get(4)?,
                 })
             });
-            match rows {
-                Ok(r) => {
-                    for row in r {
-                        results.push(row?);
-                    }
+            if let Ok(r) = rows {
+                for row in r {
+                    results.push(row?);
                 }
-                Err(_) => {} // FTS syntax error — return empty
             }
         } else {
             let mut stmt = self.conn.prepare(
@@ -559,13 +557,10 @@ impl SemanticDB {
                     source: row.get(4)?,
                 })
             });
-            match rows {
-                Ok(r) => {
-                    for row in r {
-                        results.push(row?);
-                    }
+            if let Ok(r) = rows {
+                for row in r {
+                    results.push(row?);
                 }
-                Err(_) => {} // FTS syntax error — return empty
             }
         }
 
@@ -751,13 +746,15 @@ impl SemanticDB {
 
     /// Rebuild the USearch index with a new dimension. Used on model switch.
     pub fn recreate_vec_table(&mut self, new_dimension: usize) -> Result<()> {
-        let mut options = usearch::IndexOptions::default();
-        options.dimensions = new_dimension;
-        options.metric = usearch::MetricKind::Cos;
-        options.quantization = usearch::ScalarKind::F32;
-        options.connectivity = 16;
-        options.expansion_add = 40;
-        options.expansion_search = 16;
+        let options = usearch::IndexOptions {
+            dimensions: new_dimension,
+            metric: usearch::MetricKind::Cos,
+            quantization: usearch::ScalarKind::F32,
+            connectivity: 16,
+            expansion_add: 40,
+            expansion_search: 16,
+            ..Default::default()
+        };
 
         self.index = usearch::new_index(&options)?;
         self.index.reserve(1000)?;
@@ -1022,7 +1019,7 @@ impl SemanticDB {
         &self,
         component: Option<&str>,
         limit: usize,
-    ) -> Result<Vec<(String, i64, String, String, String, Option<String>)>> {
+    ) -> Result<Vec<ErrorLogRow>> {
         let sql = if component.is_some() {
             "SELECT id, timestamp, component, severity, message, details FROM errors WHERE resolved = 0 AND component = ? ORDER BY timestamp DESC LIMIT ?"
         } else {

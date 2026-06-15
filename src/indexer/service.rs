@@ -2,7 +2,8 @@ use crate::error::{Result, ServerError};
 use crate::indexer::{IndexProgress as IndexProgressType, scanner, target::*};
 use crate::memory::service::MemoryService;
 use crossbeam_channel::Receiver;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex as TokioMutex;
@@ -185,7 +186,7 @@ impl IndexService {
                 IngestionEvent::Delete(_) => {
                     // Mark fact as stale by looking up its URN
                     let urn = if let Some(ref git) = git_state {
-                        let rel = path.strip_prefix(&git.repo_root).unwrap_or(&path);
+                        let rel = path.strip_prefix(&git.repo_root).unwrap_or(path);
                         crate::urn::SourceUrn::build_git_urn(
                             &git.host,
                             git.org.as_deref(),
@@ -228,11 +229,11 @@ impl IndexService {
     /// Read a file, compute its hash, and add or update the corresponding fact.
     async fn ingest_file(
         &self,
-        path: &PathBuf,
+        path: &Path,
         target: &IngestionTarget,
         git_state: Option<&crate::indexer::GitState>,
     ) -> Result<()> {
-        let path_for_extract = path.clone();
+        let path_for_extract = path.to_path_buf();
         let content = match tokio::task::spawn_blocking(move || {
             crate::indexer::extract::extract_text(&path_for_extract)
         })
@@ -261,7 +262,7 @@ impl IndexService {
 
         // Build source URN
         let urn = if let Some(git) = git_state {
-            let rel = path.strip_prefix(&git.repo_root).unwrap_or(&path);
+            let rel = path.strip_prefix(&git.repo_root).unwrap_or(path);
             crate::urn::SourceUrn::build_git_urn(
                 &git.host,
                 git.org.as_deref(),
@@ -341,7 +342,7 @@ impl IndexService {
 
             // Auto-detect target type
             let detected_type = match target_type {
-                Some(t) => TargetType::from_str(t).ok_or_else(|| {
+                Some(t) => TargetType::from_str(t).map_err(|_| {
                     ServerError::InvalidArgument(format!("invalid target_type: {}", t))
                 })?,
                 None => {

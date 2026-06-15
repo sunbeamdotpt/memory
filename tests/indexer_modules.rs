@@ -2,6 +2,7 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::process::Command;
+use std::str::FromStr;
 use std::time::Duration;
 
 use crossbeam_channel::bounded;
@@ -338,9 +339,9 @@ fn test_target_type_as_str_and_from_str() {
     ];
     for (variant, s) in cases {
         assert_eq!(variant.as_str(), s);
-        assert_eq!(TargetType::from_str(s), Some(variant));
+        assert_eq!(TargetType::from_str(s), Ok(variant));
     }
-    assert!(TargetType::from_str("unknown").is_none());
+    assert!(TargetType::from_str("unknown").is_err());
 }
 
 // ── integration through IndexService ──────────────────────────────────────────

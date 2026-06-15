@@ -1,9 +1,9 @@
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use mcp_server::config::MemoryConfig;
-use mcp_server::memory::service::MemoryService;
 use std::collections::HashMap;
 use std::path::Path;
 use std::time::Duration;
+use sunbeam_memory::config::MemoryConfig;
+use sunbeam_memory::memory::service::MemoryService;
 
 // ── query patterns ───────────────────────────────────────────────────────────
 

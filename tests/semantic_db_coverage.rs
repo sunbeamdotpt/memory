@@ -293,7 +293,7 @@ async fn test_rebuild_vectors_success() {
 
     let store = SemanticStore::new(&config).await.unwrap();
     store
-        .add_fact("ns", "hello", &vec![0.0; 768], None)
+        .add_fact("ns", "hello", &[0.0; 768], None)
         .await
         .unwrap();
 
@@ -308,7 +308,7 @@ async fn test_rebuild_vectors_success() {
 
     // Search still works after dimension change
     let results = store
-        .search(&vec![1.0, 0.0, 0.0, 0.0], 5, None)
+        .search(&[1.0_f32, 0.0, 0.0, 0.0], 5, None)
         .await
         .unwrap();
     assert_eq!(results.len(), 1);
@@ -325,7 +325,7 @@ async fn test_rebuild_vectors_error_from_embed_fn() {
 
     let store = SemanticStore::new(&config).await.unwrap();
     store
-        .add_fact("ns", "hello", &vec![0.0; 768], None)
+        .add_fact("ns", "hello", &[0.0; 768], None)
         .await
         .unwrap();
 
