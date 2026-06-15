@@ -12,7 +12,10 @@ pub struct SemanticStore {
 
 impl SemanticStore {
     pub async fn new(config: &SemanticConfig) -> Result<Self> {
-        let db = Arc::new(Mutex::new(super::db::SemanticDB::new(&config.base_dir, config.dimension)?));
+        let db = Arc::new(Mutex::new(super::db::SemanticDB::new(
+            &config.base_dir,
+            config.dimension,
+        )?));
         Ok(Self {
             config: config.clone(),
             db,
@@ -49,7 +52,10 @@ impl SemanticStore {
         limit: usize,
         namespace_filter: Option<&str>,
     ) -> Result<Vec<(SemanticFact, f32)>> {
-        self.db.lock().unwrap().search_similar(query_embedding, limit, namespace_filter)
+        self.db
+            .lock()
+            .unwrap()
+            .search_similar(query_embedding, limit, namespace_filter)
     }
 
     /// Return facts in a namespace ordered by creation time, without scoring.
@@ -61,7 +67,10 @@ impl SemanticStore {
         from_ts: Option<i64>,
         to_ts: Option<i64>,
     ) -> Result<Vec<SemanticFact>> {
-        self.db.lock().unwrap().search_by_namespace(namespace, limit, from_ts, to_ts)
+        self.db
+            .lock()
+            .unwrap()
+            .search_by_namespace(namespace, limit, from_ts, to_ts)
     }
 
     /// Fused BM25 + vector search via Reciprocal Rank Fusion.
@@ -75,7 +84,10 @@ impl SemanticStore {
         limit: usize,
         namespace_filter: Option<&str>,
     ) -> Result<Vec<(SemanticFact, f32)>> {
-        self.db.lock().unwrap().fused_search(query, query_embedding, limit, namespace_filter)
+        self.db
+            .lock()
+            .unwrap()
+            .fused_search(query, query_embedding, limit, namespace_filter)
     }
 
     /// Update an existing fact in place. Re-embeds with the new content and
@@ -87,7 +99,10 @@ impl SemanticStore {
         embedding: &[f32],
         source: Option<&str>,
     ) -> Result<bool> {
-        self.db.lock().unwrap().update_fact(fact_id, content, source, embedding)
+        self.db
+            .lock()
+            .unwrap()
+            .update_fact(fact_id, content, source, embedding)
     }
 
     /// Delete a fact from both the database and the vector index.
@@ -115,11 +130,7 @@ impl SemanticStore {
 
     /// Rebuild the vector table with a new dimension and re-embed all facts.
     /// Returns the number of facts re-embedded.
-    pub async fn rebuild_vectors<F>(
-        &self,
-        new_dimension: usize,
-        mut embed_fn: F,
-    ) -> Result<usize>
+    pub async fn rebuild_vectors<F>(&self, new_dimension: usize, mut embed_fn: F) -> Result<usize>
     where
         F: FnMut(&[&str]) -> Result<Vec<Vec<f32>>>,
     {
@@ -137,9 +148,15 @@ impl SemanticStore {
                 db.insert_vec(&fact.id, emb)?;
             }
             if (i + 1) % 100 == 0 || i + 1 == total {
-                let mut db = self.db.lock().unwrap();
+                let db = self.db.lock().unwrap();
                 let err_id = ulid::Ulid::new().to_string();
-                let _ = db.log_error(&err_id, "semantic", "warn", &format!("re-embedded {}/{} facts", i + 1, total), None);
+                let _ = db.log_error(
+                    &err_id,
+                    "semantic",
+                    "warn",
+                    &format!("re-embedded {}/{} facts", i + 1, total),
+                    None,
+                );
             }
         }
 
