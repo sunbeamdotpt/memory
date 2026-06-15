@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.3] — 2026-06-15
+
+### Fixed
+
+- Eliminated the O(n²) ingestion bottleneck caused by serializing the entire USearch HNSW index to a SQLite blob on every fact insertion, update, and deletion. `SemanticDB` now persists the index blob only every 1,000 mutations and on graceful shutdown.
+- Added a `_usearch_vectors` table that stores each fact's raw embedding vector. On startup the index is rebuilt from these vectors if the persisted blob is stale, so a crash between periodic saves no longer leaves facts unsearchable.
+- Reduced global database lock contention during large initial syncs, which previously caused `add_watch_target` and other operations to time out while the indexer was running.
+
+### Changed
+
+- `recreate_vec_table` now also clears `_usearch_vectors` when switching embedding models.
+
 ## [0.3.2] — 2026-06-15
 
 ### Fixed

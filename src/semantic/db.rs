@@ -18,6 +18,10 @@ pub struct SemanticDB {
     index: usearch::Index,
     key_to_fact: HashMap<u64, String>,
     fact_to_key: HashMap<String, u64>,
+    /// Number of mutating operations since the index blob was last persisted.
+    dirty_count: usize,
+    /// Persist the index blob every N mutations (and on shutdown).
+    save_interval: usize,
 }
 
 impl SemanticDB {
@@ -125,6 +129,15 @@ impl SemanticDB {
             [],
         )?;
 
+        // Per-fact vector storage so the index can be rebuilt if the blob is stale.
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS _usearch_vectors (
+                fact_id TEXT PRIMARY KEY,
+                vector BLOB NOT NULL
+            )",
+            [],
+        )?;
+
         // FTS5 full-text index for BM25 keyword search (external content table)
         let has_old_fts: bool = conn.query_row(
             "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='fts_facts' AND sql NOT LIKE '%content=%'",
@@ -187,13 +200,17 @@ impl SemanticDB {
             params![dimension.to_string()],
         )?;
 
-        Ok(Self {
+        let mut db = Self {
             conn,
             dimension,
             index,
             key_to_fact,
             fact_to_key,
-        })
+            dirty_count: 0,
+            save_interval: 1000,
+        };
+        db.ensure_index_consistency()?;
+        Ok(db)
     }
 
     /// Load an existing USearch index from SQLite blob, or create a fresh one.
@@ -264,6 +281,117 @@ impl SemanticDB {
         Ok(())
     }
 
+    /// Persist the index blob if enough mutations have accumulated.
+    fn save_index_blob_if_due(&mut self) -> Result<()> {
+        if self.dirty_count > 0 && self.dirty_count.is_multiple_of(self.save_interval) {
+            self.save_index_blob()?;
+            self.dirty_count = 0;
+        }
+        Ok(())
+    }
+
+    /// Convert an embedding vector to a stable byte representation.
+    fn embedding_to_blob(embedding: &[f32]) -> Vec<u8> {
+        let mut blob = Vec::with_capacity(embedding.len() * 4);
+        for v in embedding {
+            blob.extend_from_slice(&v.to_le_bytes());
+        }
+        blob
+    }
+
+    /// Reconstruct an embedding vector from its byte representation.
+    fn blob_to_embedding(blob: &[u8]) -> Result<Vec<f32>> {
+        if !blob.len().is_multiple_of(4) {
+            return Err(ServerError::DatabaseError(
+                "vector blob length is not a multiple of 4".to_string(),
+            ));
+        }
+        let mut vec = Vec::with_capacity(blob.len() / 4);
+        for chunk in blob.chunks_exact(4) {
+            let bytes: [u8; 4] = chunk
+                .try_into()
+                .map_err(|_| ServerError::DatabaseError("invalid vector blob chunk".to_string()))?;
+            vec.push(f32::from_le_bytes(bytes));
+        }
+        Ok(vec)
+    }
+
+    /// Ensure the in-memory index matches the persisted key registry.
+    /// Backfills the vector table from the index on first run, and rebuilds the
+    /// index from the vector table if the loaded blob was stale.
+    fn ensure_index_consistency(&mut self) -> Result<()> {
+        let expected = self.key_to_fact.len();
+
+        // One-time migration: make sure every tracked fact has a stored vector.
+        let vector_count: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM _usearch_vectors", [], |row| {
+                row.get(0)
+            })
+            .unwrap_or(0);
+        if (vector_count as usize) < expected {
+            self.backfill_vectors_from_index()?;
+        }
+
+        // If the loaded blob is out of sync with the key registry, rebuild from vectors.
+        if self.index.size() != expected {
+            self.rebuild_index_from_vectors()?;
+        }
+
+        Ok(())
+    }
+
+    /// Populate `_usearch_vectors` by exporting vectors from the current index.
+    fn backfill_vectors_from_index(&mut self) -> Result<()> {
+        for (&ukey, fact_id) in &self.key_to_fact {
+            let mut vec = Vec::new();
+            if self.index.export(ukey, &mut vec)? == 0 {
+                continue;
+            }
+            let blob = Self::embedding_to_blob(&vec);
+            self.conn.execute(
+                "INSERT OR REPLACE INTO _usearch_vectors (fact_id, vector) VALUES (?, ?)",
+                params![fact_id, blob],
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Rebuild the in-memory USearch index from the `_usearch_vectors` table.
+    fn rebuild_index_from_vectors(&mut self) -> Result<()> {
+        let options = usearch::IndexOptions {
+            dimensions: self.dimension,
+            metric: usearch::MetricKind::Cos,
+            quantization: usearch::ScalarKind::F32,
+            connectivity: 16,
+            expansion_add: 40,
+            expansion_search: 16,
+            ..Default::default()
+        };
+
+        self.index = usearch::new_index(&options)?;
+        self.index
+            .reserve(self.key_to_fact.len().saturating_add(1000))?;
+
+        let mut stmt = self
+            .conn
+            .prepare("SELECT fact_id, vector FROM _usearch_vectors")?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
+        })?;
+
+        for row in rows {
+            let (fact_id, blob) = row?;
+            let Some(&ukey) = self.fact_to_key.get(&fact_id) else {
+                continue;
+            };
+            let embedding = Self::blob_to_embedding(&blob)?;
+            self.index.add(ukey, &embedding)?;
+        }
+
+        Ok(())
+    }
+
     /// Allocate a new USearch key.
     fn next_ukey(&self) -> Result<u64> {
         let next: i64 = self.conn.query_row(
@@ -316,7 +444,8 @@ impl SemanticDB {
         let timestamp = chrono::Utc::now().timestamp();
         let ukey = self.next_ukey()?;
 
-        // Update in-memory index first (so we can serialize it)
+        // Update in-memory index first; the full index blob is persisted
+        // periodically (see save_index_blob_if_due) rather than on every insert.
         self.index.add(ukey, &fact.embedding)?;
 
         let tx = self.conn.transaction()?;
@@ -334,27 +463,17 @@ impl SemanticDB {
             "INSERT INTO _usearch_keys (ukey, fact_id) VALUES (?, ?)",
             params![ukey as i64, &fact_id],
         )?;
-
-        // Save blob inside transaction for atomicity
-        let len = self.index.serialized_length();
-        if len == 0 {
-            tx.execute(
-                "INSERT OR REPLACE INTO _usearch_index (id, blob) VALUES (1, ?)",
-                params![&[] as &[u8]],
-            )?;
-        } else {
-            let mut buf = vec![0u8; len];
-            self.index.save_to_buffer(&mut buf)?;
-            tx.execute(
-                "INSERT OR REPLACE INTO _usearch_index (id, blob) VALUES (1, ?)",
-                params![buf],
-            )?;
-        }
+        tx.execute(
+            "INSERT OR REPLACE INTO _usearch_vectors (fact_id, vector) VALUES (?, ?)",
+            params![&fact_id, Self::embedding_to_blob(&fact.embedding)],
+        )?;
 
         tx.commit()?;
 
         self.key_to_fact.insert(ukey, fact_id.clone());
         self.fact_to_key.insert(fact_id.clone(), ukey);
+        self.dirty_count += 1;
+        self.save_index_blob_if_due()?;
 
         Ok((fact_id, timestamp))
     }
@@ -658,23 +777,14 @@ impl SemanticDB {
             tx.commit()?;
             return Ok(false);
         }
-
-        let len = self.index.serialized_length();
-        if len == 0 {
-            tx.execute(
-                "INSERT OR REPLACE INTO _usearch_index (id, blob) VALUES (1, ?)",
-                params![&[] as &[u8]],
-            )?;
-        } else {
-            let mut buf = vec![0u8; len];
-            self.index.save_to_buffer(&mut buf)?;
-            tx.execute(
-                "INSERT OR REPLACE INTO _usearch_index (id, blob) VALUES (1, ?)",
-                params![buf],
-            )?;
-        }
+        tx.execute(
+            "INSERT OR REPLACE INTO _usearch_vectors (fact_id, vector) VALUES (?, ?)",
+            params![fact_id, Self::embedding_to_blob(embedding)],
+        )?;
 
         tx.commit()?;
+        self.dirty_count += 1;
+        self.save_index_blob_if_due()?;
         Ok(true)
     }
 
@@ -692,27 +802,18 @@ impl SemanticDB {
             "DELETE FROM _usearch_keys WHERE fact_id = ?",
             params![fact_id],
         )?;
+        tx.execute(
+            "DELETE FROM _usearch_vectors WHERE fact_id = ?",
+            params![fact_id],
+        )?;
         let count = tx.execute("DELETE FROM facts WHERE id = ?", params![fact_id])?;
-
-        let len = self.index.serialized_length();
-        if len == 0 {
-            tx.execute(
-                "INSERT OR REPLACE INTO _usearch_index (id, blob) VALUES (1, ?)",
-                params![&[] as &[u8]],
-            )?;
-        } else {
-            let mut buf = vec![0u8; len];
-            self.index.save_to_buffer(&mut buf)?;
-            tx.execute(
-                "INSERT OR REPLACE INTO _usearch_index (id, blob) VALUES (1, ?)",
-                params![buf],
-            )?;
-        }
 
         tx.commit()?;
 
         self.key_to_fact.remove(&ukey);
         self.fact_to_key.remove(fact_id);
+        self.dirty_count += 1;
+        self.save_index_blob_if_due()?;
 
         Ok(count > 0)
     }
@@ -760,8 +861,10 @@ impl SemanticDB {
 
         self.conn.execute("DELETE FROM _usearch_keys", [])?;
         self.conn.execute("DELETE FROM _usearch_index", [])?;
+        self.conn.execute("DELETE FROM _usearch_vectors", [])?;
         self.key_to_fact.clear();
         self.fact_to_key.clear();
+        self.dirty_count = 0;
 
         self.conn.execute(
             "INSERT OR REPLACE INTO _meta (key, value) VALUES ('dimension', ?)",
@@ -795,14 +898,30 @@ impl SemanticDB {
 
         self.index.remove(ukey)?;
         self.index.add(ukey, embedding)?;
-        self.save_index_blob()?;
+        self.conn.execute(
+            "INSERT OR REPLACE INTO _usearch_vectors (fact_id, vector) VALUES (?, ?)",
+            params![fact_id, Self::embedding_to_blob(embedding)],
+        )?;
+        self.dirty_count += 1;
+        self.save_index_blob_if_due()?;
         Ok(())
     }
 
     pub fn dimension(&self) -> usize {
         self.dimension
     }
+}
 
+impl Drop for SemanticDB {
+    fn drop(&mut self) {
+        // Best-effort flush of the index blob when the database is shut down.
+        if self.dirty_count > 0 {
+            let _ = self.save_index_blob();
+        }
+    }
+}
+
+impl SemanticDB {
     // ── Ingestion target registry ───────────────────────────────────────────────
 
     pub fn add_ingestion_target(&self, target: &crate::indexer::IngestionTarget) -> Result<()> {
