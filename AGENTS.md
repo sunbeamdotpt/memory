@@ -27,6 +27,21 @@ The server exposes an MCP (Model Context Protocol) interface over **stdio** (loc
 
 ---
 
+## Agent workflow
+
+If a `sunbeam-memory` MCP server is available in your environment, use it as a semantic search tool while working on this codebase:
+
+1. **Search first.** Before adding or changing functionality, call `search_facts` with natural-language queries about the component, previous decisions, known issues, or design patterns. Example queries:
+   - "how does fused search combine BM25 and vector results?"
+   - "previous decisions about auth middleware"
+   - "why does IndexWatcher skip binary files?"
+2. **Store useful findings.** If you discover something that future agents should remember (a gotcha, a design decision, a workaround), call `store_fact` with a concise note and a source URN when possible.
+3. **Index the repo if needed.** If the current checkout is not already being watched, you can call `add_watch_target` with the absolute repository path to ingest `src/**/*.rs` and other tracked files.
+
+Default namespace is `"default"`; prefer a project-specific namespace (e.g., `"sunbeam-memory"`) for facts that are not generic.
+
+---
+
 ## Technology Stack
 
 | Layer | Crate / Tool | Purpose |
