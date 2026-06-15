@@ -249,3 +249,34 @@ async fn test_process_batch_ignores_binary_and_directory_events() {
     drop(tx);
     indexer.run().await;
 }
+
+#[tokio::test]
+async fn test_process_batch_ignores_git_internals() {
+    let (memory, indexer, tx, dir) = setup_with_channel().await;
+    let root = dir.path().canonicalize().unwrap();
+
+    let git_dir = root.join(".git");
+    std::fs::create_dir(&git_dir).unwrap();
+    let lock_path = git_dir.join("index.lock");
+    std::fs::write(&lock_path, "lock file content").unwrap();
+
+    indexer
+        .add_target(root.to_str().unwrap(), None, Some("directory"))
+        .await
+        .unwrap();
+
+    tx.send(IngestionEvent::Modify(lock_path)).unwrap();
+    drop(tx);
+    indexer.run().await;
+
+    // The lock file should not have been ingested.
+    let results = memory
+        .search_facts("lock file content", 5, None)
+        .await
+        .unwrap();
+    assert!(results.is_empty());
+
+    // No ingestion errors should have been logged.
+    let errors = memory.get_recent_errors(None, 10).await.unwrap();
+    assert!(errors.is_empty(), "expected no errors, got {:?}", errors);
+}

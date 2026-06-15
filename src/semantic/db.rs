@@ -505,12 +505,10 @@ impl SemanticDB {
         limit: usize,
         namespace_filter: Option<&str>,
     ) -> Result<Vec<SemanticFact>> {
-        let sanitized = sanitize_fts5_query(query);
-        let raw_query = if sanitized.trim().is_empty() {
-            query
-        } else {
-            &sanitized
-        };
+        let raw_query = sanitize_fts5_query(query);
+        if raw_query.is_empty() {
+            return Ok(Vec::new());
+        }
 
         let mut results = Vec::new();
 
@@ -1065,19 +1063,25 @@ impl SemanticDB {
 }
 
 /// Sanitize a raw query string for FTS5 MATCH to avoid syntax errors.
-/// Removes quotes, asterisks, and question marks, collapses whitespace.
+///
+/// FTS5 interprets several characters as query syntax (`:`, `*`, `"`, `+`, `-`,
+/// `(`, `)`, `^`, etc.) and treats bare words such as `AND`, `OR`, and `NOT` as
+/// operators. To keep keyword search simple and safe, this function strips all
+/// non-alphanumeric characters, then wraps every remaining token in double
+/// quotes so it is treated as a literal term.
 fn sanitize_fts5_query(query: &str) -> String {
     query
         .chars()
         .map(|c| {
-            if c == '"' || c == '*' || c == '?' {
-                ' '
-            } else {
+            if c.is_alphanumeric() || c.is_whitespace() {
                 c
+            } else {
+                ' '
             }
         })
         .collect::<String>()
         .split_whitespace()
+        .map(|t| format!("\"{}\"", t))
         .collect::<Vec<_>>()
         .join(" ")
 }

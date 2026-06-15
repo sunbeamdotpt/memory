@@ -259,11 +259,23 @@ fn test_search_bm25_sanitizes_special_characters() {
     let f = fact("f1", "hello world", vec![0.0; 768]);
     db.add_fact(&f).unwrap();
 
-    // Quotes, asterisks, and question marks are stripped and the remaining
-    // token is used for the FTS5 MATCH.
+    // Quotes, asterisks, question marks, and colons are stripped and the
+    // remaining token is used for the FTS5 MATCH.
     let results = db.search_bm25("\"world*?\"", 10, None).unwrap();
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].id, "f1");
+
+    // A colon would normally be interpreted as an FTS5 column filter
+    // ("no such column: kms"); it should be sanitized to a literal search.
+    let f2 = fact("f2", "kms vault world", vec![0.0; 768]);
+    db.add_fact(&f2).unwrap();
+    let results = db.search_bm25("kms: vault world", 10, None).unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].id, "f2");
+
+    // A query that is only punctuation should return empty results, not error.
+    let results = db.search_bm25("*?:()", 10, None).unwrap();
+    assert!(results.is_empty());
 }
 
 #[test]

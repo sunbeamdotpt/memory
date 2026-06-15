@@ -46,6 +46,11 @@ impl IndexWatcher {
 
         // Find matching target(s) for each affected path
         for path in &event.paths {
+            // Ignore anything inside a `.git` directory (e.g. `.git/index.lock`).
+            if path.components().any(|c| c.as_os_str() == ".git") {
+                continue;
+            }
+
             for target_path in guard.values() {
                 if path.starts_with(target_path) {
                     let evt = match kind {

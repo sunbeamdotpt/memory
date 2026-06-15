@@ -177,6 +177,12 @@ impl IndexService {
                 continue;
             }
 
+            // Ignore Git internals such as `.git/index.lock`; they are not user
+            // content and are frequently transient/locked.
+            if path.components().any(|c| c.as_os_str() == ".git") {
+                continue;
+            }
+
             // Skip binary files (simple heuristic)
             if scanner::is_likely_binary(path) {
                 continue;
