@@ -1,16 +1,24 @@
-use sunbeam_memory::memory::service::MemoryService;
 use sunbeam_memory::config::MemoryConfig;
+use sunbeam_memory::memory::service::MemoryService;
 
 #[tokio::test]
 async fn test_memory_service_can_add_fact_to_semantic_memory() {
     let dir = tempfile::tempdir().unwrap();
-    let config = MemoryConfig { base_dir: dir.path().to_str().unwrap().to_string(), ..Default::default() };
+    let config = MemoryConfig {
+        base_dir: dir.path().to_str().unwrap().to_string(),
+        ..Default::default()
+    };
 
     let service = MemoryService::new(&config).await.unwrap();
 
-    let result = service.add_fact("test_namespace", "Test fact content", None).await;
+    let result = service
+        .add_fact("test_namespace", "Test fact content", None)
+        .await;
 
-    assert!(result.is_ok(), "Should be able to add fact to semantic memory");
+    assert!(
+        result.is_ok(),
+        "Should be able to add fact to semantic memory"
+    );
 
     if let Ok(fact) = result {
         assert_eq!(fact.namespace, "test_namespace");
@@ -22,24 +30,36 @@ async fn test_memory_service_can_add_fact_to_semantic_memory() {
 #[tokio::test]
 async fn test_memory_service_can_search_semantic_memory() {
     let dir = tempfile::tempdir().unwrap();
-    let config = MemoryConfig { base_dir: dir.path().to_str().unwrap().to_string(), ..Default::default() };
+    let config = MemoryConfig {
+        base_dir: dir.path().to_str().unwrap().to_string(),
+        ..Default::default()
+    };
 
     let service = MemoryService::new(&config).await.unwrap();
 
-    service.add_fact("test", "Rust is a systems programming language", None).await.ok();
+    service
+        .add_fact("test", "Rust is a systems programming language", None)
+        .await
+        .ok();
 
     let result = service.search_facts("programming language", 5, None).await;
 
     assert!(result.is_ok(), "Should be able to search semantic memory");
 
     if let Ok(search_results) = result {
-        assert!(!search_results.is_empty(), "Should find at least one result");
+        assert!(
+            !search_results.is_empty(),
+            "Should find at least one result"
+        );
     }
 }
 
 #[tokio::test]
 async fn test_memory_service_handles_semantic_errors() {
-    let config = MemoryConfig { base_dir: "/invalid/semantic/path".to_string(), ..Default::default() };
+    let config = MemoryConfig {
+        base_dir: "/invalid/semantic/path".to_string(),
+        ..Default::default()
+    };
 
     let result = MemoryService::new(&config).await;
     assert!(result.is_err(), "Should handle invalid paths gracefully");
@@ -48,7 +68,10 @@ async fn test_memory_service_handles_semantic_errors() {
 #[tokio::test]
 async fn test_memory_service_can_delete_facts() {
     let dir = tempfile::tempdir().unwrap();
-    let config = MemoryConfig { base_dir: dir.path().to_str().unwrap().to_string(), ..Default::default() };
+    let config = MemoryConfig {
+        base_dir: dir.path().to_str().unwrap().to_string(),
+        ..Default::default()
+    };
 
     let service = MemoryService::new(&config).await.unwrap();
 

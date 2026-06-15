@@ -1,3 +1,4 @@
+use rmcp::handler::server::wrapper::Parameters;
 /// Acceptance tests that onboard a representative slice of the mcp-server repo
 /// through the MCP protocol layer and verify semantic retrieval quality.
 ///
@@ -16,12 +17,11 @@
 use sunbeam_memory::{
     config::MemoryConfig,
     core::service::CoreService,
-    memory::service::MemoryService,
-    mcp::server::SunbeamServer,
-    mcp::{StoreFactParams, SearchFactsParams},
     indexer::{IndexService, IndexWatcher},
+    mcp::server::SunbeamServer,
+    mcp::{SearchFactsParams, StoreFactParams},
+    memory::service::MemoryService,
 };
-use rmcp::handler::server::wrapper::Parameters;
 
 async fn setup_server() -> (SunbeamServer, MemoryService) {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -93,11 +93,14 @@ const INDEX: &[&str] = &[
 // ── MCP helpers ───────────────────────────────────────────────────────────────
 
 async fn store(server: &SunbeamServer, namespace: &str, content: &str, source: Option<&str>) {
-    let result = server.store_fact(Parameters(StoreFactParams {
-        content: content.to_string(),
-        namespace: Some(namespace.to_string()),
-        source: source.map(|s| s.to_string()),
-    })).await.expect("store_fact should succeed");
+    let result = server
+        .store_fact(Parameters(StoreFactParams {
+            content: content.to_string(),
+            namespace: Some(namespace.to_string()),
+            source: source.map(|s| s.to_string()),
+        }))
+        .await
+        .expect("store_fact should succeed");
     assert!(
         result.is_error != Some(true),
         "store_fact tool error: {}",
@@ -112,11 +115,14 @@ async fn search(
     limit: usize,
     namespace: Option<&str>,
 ) -> String {
-    let result = server.search_facts(Parameters(SearchFactsParams {
-        query: query.to_string(),
-        limit: Some(limit as u64),
-        namespace: namespace.map(|s| s.to_string()),
-    })).await.expect("search_facts should succeed");
+    let result = server
+        .search_facts(Parameters(SearchFactsParams {
+            query: query.to_string(),
+            limit: Some(limit as u64),
+            namespace: namespace.map(|s| s.to_string()),
+        }))
+        .await
+        .expect("search_facts should succeed");
     result.content[0]
         .as_text()
         .map(|t| t.text.clone())
@@ -168,7 +174,11 @@ async fn test_onboard_general_knowledge() {
     let q = "where is the data stored on disk?";
     let result = search(&server, q, 3, None).await;
     eprintln!("\n── Q: {q}\n{result}");
-    assert_hit(&result, &["sqlite", "mcp_memory_base_dir", "base_dir", "database"], q);
+    assert_hit(
+        &result,
+        &["sqlite", "mcp_memory_base_dir", "base_dir", "database"],
+        q,
+    );
 }
 
 // ── test 2: code search ───────────────────────────────────────────────────────
@@ -251,12 +261,20 @@ async fn test_onboard_code_semantic() {
     let q = "finding the most relevant stored content";
     let result = search(&server, q, 3, Some("index")).await;
     eprintln!("\n── Q: {q}\n{result}");
-    assert_hit(&result, &["cosine", "similarity", "search_facts", "ranked"], q);
+    assert_hit(
+        &result,
+        &["cosine", "similarity", "search_facts", "ranked"],
+        q,
+    );
 
     let q = "what happens when I delete a fact?";
     let result = search(&server, q, 3, Some("index")).await;
     eprintln!("\n── Q: {q}\n{result}");
-    assert_hit(&result, &["sqlite", "evict", "hashmap", "delete", "index"], q);
+    assert_hit(
+        &result,
+        &["sqlite", "evict", "hashmap", "delete", "index"],
+        q,
+    );
 
     let q = "searching with a keyword plus vector";
     let result = search(&server, q, 3, Some("index")).await;

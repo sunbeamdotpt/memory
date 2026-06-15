@@ -23,14 +23,18 @@ pub fn resolve_git_state(path: &Path) -> Result<Option<GitState>> {
     let repo_root = repo.work_dir().map(Path::to_path_buf).unwrap_or_default();
 
     // Resolve branch name
-    let branch = match repo.head_ref().map_err(|e| ServerError::DatabaseError(e.to_string()))? {
+    let branch = match repo
+        .head_ref()
+        .map_err(|e| ServerError::DatabaseError(e.to_string()))?
+    {
         Some(r) => r.name().shorten().to_string(),
         None => "HEAD".to_string(),
     };
 
     // Resolve HEAD commit
     let commit = repo
-        .head_commit().map_err(|e| ServerError::DatabaseError(e.to_string()))?
+        .head_commit()
+        .map_err(|e| ServerError::DatabaseError(e.to_string()))?
         .id
         .to_hex()
         .to_string();

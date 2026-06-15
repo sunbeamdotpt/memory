@@ -33,8 +33,12 @@ impl Default for MemoryConfig {
 impl MemoryConfig {
     pub fn from_env() -> Self {
         Self {
-            base_dir: std::env::var("MCP_MEMORY_BASE_DIR")
-                .unwrap_or_else(|_| crate::paths::data_dir().join("memory").to_string_lossy().to_string()),
+            base_dir: std::env::var("MCP_MEMORY_BASE_DIR").unwrap_or_else(|_| {
+                crate::paths::data_dir()
+                    .join("memory")
+                    .to_string_lossy()
+                    .to_string()
+            }),
             auth_token: std::env::var("MCP_AUTH_TOKEN").ok(),
             oidc_issuer: std::env::var("MCP_OIDC_ISSUER").ok(),
             oidc_audience: std::env::var("MCP_OIDC_AUDIENCE").ok(),

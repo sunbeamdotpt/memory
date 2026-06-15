@@ -1,7 +1,7 @@
 use crate::error::Result;
 use crate::indexer::service::IngestionEvent;
 use crossbeam_channel::Sender;
-use notify::{event::ModifyKind, Event, EventKind, RecursiveMode, Watcher};
+use notify::{Event, EventKind, RecursiveMode, Watcher, event::ModifyKind};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -17,12 +17,13 @@ impl IndexWatcher {
         let targets = Arc::new(Mutex::new(HashMap::new()));
         let targets_clone = targets.clone();
 
-        let watcher = notify::recommended_watcher(move |res: std::result::Result<Event, notify::Error>| {
-            if let Ok(event) = res {
-                Self::handle_notify_event(event, &targets_clone, &event_tx);
-            }
-        })
-        .map_err(|e| crate::error::ServerError::DatabaseError(e.to_string()))?;
+        let watcher =
+            notify::recommended_watcher(move |res: std::result::Result<Event, notify::Error>| {
+                if let Ok(event) = res {
+                    Self::handle_notify_event(event, &targets_clone, &event_tx);
+                }
+            })
+            .map_err(|e| crate::error::ServerError::DatabaseError(e.to_string()))?;
 
         Ok(Self { watcher, targets })
     }
@@ -72,7 +73,10 @@ impl IndexWatcher {
     }
 
     pub fn add_target(&mut self, target_id: String, path: &Path) -> Result<()> {
-        self.targets.lock().unwrap().insert(target_id, path.to_path_buf());
+        self.targets
+            .lock()
+            .unwrap()
+            .insert(target_id, path.to_path_buf());
         self.watcher
             .watch(path, RecursiveMode::Recursive)
             .map_err(|e| crate::error::ServerError::DatabaseError(e.to_string()))?;

@@ -1,5 +1,5 @@
 use sunbeam_memory::semantic::db::SemanticDB;
-use sunbeam_memory::semantic::{SemanticFact, SemanticConfig};
+use sunbeam_memory::semantic::{SemanticConfig, SemanticFact};
 
 #[test]
 fn test_add_fact_dimension_mismatch() {
@@ -181,7 +181,9 @@ fn test_get_all_facts() {
 fn test_update_fact_nonexistent() {
     let dir = tempfile::tempdir().unwrap();
     let mut db = SemanticDB::new(dir.path().to_str().unwrap(), 768).unwrap();
-    let result = db.update_fact("non-existent", "content", None, &vec![0.0; 768]).unwrap();
+    let result = db
+        .update_fact("non-existent", "content", None, &vec![0.0; 768])
+        .unwrap();
     assert!(!result);
 }
 

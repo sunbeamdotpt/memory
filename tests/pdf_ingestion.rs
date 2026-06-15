@@ -1,9 +1,9 @@
+use std::path::PathBuf;
 use sunbeam_memory::{
     config::MemoryConfig,
     indexer::{IndexService, IndexWatcher},
     memory::service::MemoryService,
 };
-use std::path::PathBuf;
 
 async fn setup() -> (MemoryService, IndexService, tempfile::TempDir) {
     let dir = tempfile::tempdir().unwrap();
@@ -49,7 +49,11 @@ async fn test_pdf_extraction_and_search() {
 
     // Search for a concept from the paper
     let results = memory
-        .search_facts("lock service loosely coupled distributed", 5, Some("research"))
+        .search_facts(
+            "lock service loosely coupled distributed",
+            5,
+            Some("research"),
+        )
         .await
         .expect("search failed");
 
@@ -123,9 +127,17 @@ async fn test_sync_progress_processing_counter_resets() {
     let src_dir = temp_dir.path().join("src");
     std::fs::create_dir(&src_dir).unwrap();
 
-    std::fs::write(src_dir.join("main.rs"), "fn main() { println!(\"hello\"); }").unwrap();
+    std::fs::write(
+        src_dir.join("main.rs"),
+        "fn main() { println!(\"hello\"); }",
+    )
+    .unwrap();
     std::fs::write(src_dir.join("lib.rs"), "pub mod foo;").unwrap();
-    std::fs::write(src_dir.join("README.md"), "# Test Project\n\nThis is a test.").unwrap();
+    std::fs::write(
+        src_dir.join("README.md"),
+        "# Test Project\n\nThis is a test.",
+    )
+    .unwrap();
     // Binary file that will fail UTF-8 validation
     std::fs::write(src_dir.join("data.bin"), vec![0u8, 1, 2, 255, 254]).unwrap();
 
@@ -155,10 +167,15 @@ async fn test_sync_progress_processing_counter_resets() {
     // Invariant: pending + processing + completed + failed == total
     let accounted = p.files_pending + p.files_processing + p.files_completed + p.files_failed;
     assert_eq!(
-        accounted, p.files_total,
+        accounted,
+        p.files_total,
         "progress invariant broken: pending({}) + processing({}) + completed({}) + failed({}) = {}, but total is {}",
-        p.files_pending, p.files_processing, p.files_completed, p.files_failed,
-        accounted, p.files_total
+        p.files_pending,
+        p.files_processing,
+        p.files_completed,
+        p.files_failed,
+        accounted,
+        p.files_total
     );
 
     // We expect 3 text files to succeed and 1 binary file to fail

@@ -1,13 +1,13 @@
 pub mod config;
-pub mod error;
-pub mod memory;
 pub mod embedding;
-pub mod semantic;
+pub mod error;
 pub mod logging;
 pub mod mcp;
+pub mod memory;
+pub mod semantic;
 pub mod urn;
 
-pub mod paths;
-pub mod indexer;
-pub mod core;
 pub mod connect;
+pub mod core;
+pub mod indexer;
+pub mod paths;

@@ -7,7 +7,7 @@
 //! the respective adapters.
 
 use crate::error::{Result, ServerError};
-use crate::indexer::{IndexService, TargetProgress, IngestionTarget};
+use crate::indexer::{IndexService, IngestionTarget, TargetProgress};
 use crate::memory::service::{MemoryFact, MemoryService};
 use crate::urn::SourceUrn;
 
@@ -53,9 +53,8 @@ impl CoreService {
         }
         let ns = namespace.unwrap_or("default");
         if let Some(s) = source {
-            SourceUrn::parse(s).map_err(|e| {
-                ServerError::InvalidArgument(format!("Invalid source URN: {e}"))
-            })?;
+            SourceUrn::parse(s)
+                .map_err(|e| ServerError::InvalidArgument(format!("Invalid source URN: {e}")))?;
         }
         self.memory.add_fact(ns, content, source).await
     }
@@ -91,9 +90,8 @@ impl CoreService {
             ));
         }
         if let Some(s) = source {
-            SourceUrn::parse(s).map_err(|e| {
-                ServerError::InvalidArgument(format!("Invalid source URN: {e}"))
-            })?;
+            SourceUrn::parse(s)
+                .map_err(|e| ServerError::InvalidArgument(format!("Invalid source URN: {e}")))?;
         }
         self.memory.update_fact(id, content, source).await
     }
@@ -116,7 +114,9 @@ impl CoreService {
     ) -> Result<Vec<MemoryFact>> {
         let from_ts = from.and_then(parse_ts);
         let to_ts = to.and_then(parse_ts);
-        self.memory.list_facts(namespace, limit, from_ts, to_ts).await
+        self.memory
+            .list_facts(namespace, limit, from_ts, to_ts)
+            .await
     }
 
     // ── Indexer ────────────────────────────────────────────────────────────────
@@ -129,9 +129,14 @@ impl CoreService {
         target_type: Option<&str>,
     ) -> Result<Vec<String>> {
         if path.is_empty() {
-            return Err(ServerError::InvalidArgument("`path` is required".to_string()));
+            return Err(ServerError::InvalidArgument(
+                "`path` is required".to_string(),
+            ));
         }
-        let ids = self.indexer.add_target(path, namespace, target_type).await?;
+        let ids = self
+            .indexer
+            .add_target(path, namespace, target_type)
+            .await?;
         // Spawn initial sync in background
         let indexer = self.indexer.clone();
         let ids_clone = ids.clone();
@@ -239,7 +244,9 @@ impl CoreService {
     /// Parse a smem URN and return structured JSON describing its components.
     pub fn parse_source_urn(&self, urn: &str) -> Result<serde_json::Value> {
         if urn.is_empty() {
-            return Err(ServerError::InvalidArgument("`urn` is required".to_string()));
+            return Err(ServerError::InvalidArgument(
+                "`urn` is required".to_string(),
+            ));
         }
         let result = match SourceUrn::parse(urn) {
             Ok(u) => u.describe(),

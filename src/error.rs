@@ -1,5 +1,5 @@
-use thiserror::Error;
 use crate::embedding::service::EmbeddingError;
+use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum ServerError {

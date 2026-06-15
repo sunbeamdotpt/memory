@@ -1,5 +1,5 @@
+use sunbeam_memory::embedding::service::{EmbeddingModelType, EmbeddingService};
 use sunbeam_memory::semantic::{SemanticConfig, SemanticStore};
-use sunbeam_memory::embedding::service::{EmbeddingService, EmbeddingModelType};
 
 #[tokio::test]
 async fn test_semantic_store_can_be_created() {
@@ -34,7 +34,8 @@ async fn test_semantic_store_can_add_and_search_facts() {
     let content = "The quick brown fox jumps over the lazy dog";
     let namespace = "test";
 
-    let embeddings = embedding_service.embed(&[content])
+    let embeddings = embedding_service
+        .embed(&[content])
         .await
         .expect("Should generate embeddings");
 
@@ -46,7 +47,8 @@ async fn test_semantic_store_can_add_and_search_facts() {
     assert!(!fact_id.is_empty(), "Fact ID should not be empty");
 
     let query = "A fast fox leaps over a sleepy canine";
-    let query_embeddings = embedding_service.embed(&[query])
+    let query_embeddings = embedding_service
+        .embed(&[query])
         .await
         .expect("Should generate query embeddings");
 
@@ -61,11 +63,14 @@ async fn test_semantic_store_can_add_and_search_facts() {
 
 #[tokio::test]
 async fn test_semantic_search_with_memory_service_integration() {
-    use sunbeam_memory::memory::service::MemoryService;
     use sunbeam_memory::config::MemoryConfig;
+    use sunbeam_memory::memory::service::MemoryService;
 
     let dir = tempfile::tempdir().unwrap();
-    let memory_config = MemoryConfig { base_dir: dir.path().to_str().unwrap().to_string(), ..Default::default() };
+    let memory_config = MemoryConfig {
+        base_dir: dir.path().to_str().unwrap().to_string(),
+        ..Default::default()
+    };
 
     let memory_service = MemoryService::new(&memory_config)
         .await
@@ -74,16 +79,21 @@ async fn test_semantic_search_with_memory_service_integration() {
     let namespace = "animals";
     let content = "Elephants are the largest land animals";
 
-    let result = memory_service.add_fact(namespace, content, None)
+    let result = memory_service
+        .add_fact(namespace, content, None)
         .await
         .expect("Should add fact with embedding");
 
     assert!(!result.id.is_empty(), "Should return a valid fact ID");
 
     let query = "What is the biggest animal on land?";
-    let results = memory_service.search_facts(query, 3, None)
+    let results = memory_service
+        .search_facts(query, 3, None)
         .await
         .expect("Should search facts semantically");
 
-    assert!(!results.is_empty(), "Should find semantically similar facts");
+    assert!(
+        !results.is_empty(),
+        "Should find semantically similar facts"
+    );
 }

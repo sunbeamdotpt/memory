@@ -1,14 +1,14 @@
 pub mod extract;
 pub mod git;
 pub mod progress;
-pub mod target;
-pub mod service;
-pub mod watcher;
 pub mod scanner;
+pub mod service;
+pub mod target;
+pub mod watcher;
 
-pub use git::{resolve_git_state, GitState};
+pub use git::{GitState, resolve_git_state};
 pub use progress::{IndexProgress, TargetProgress};
-pub use target::{IngestionTarget, TargetType};
+pub use scanner::{is_likely_binary, scan_target};
 pub use service::{IndexService, IngestionEvent};
+pub use target::{IngestionTarget, TargetType};
 pub use watcher::IndexWatcher;
-pub use scanner::{scan_target, is_likely_binary};

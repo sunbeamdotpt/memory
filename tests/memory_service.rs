@@ -8,7 +8,7 @@ fn test_memory_service_structure_exists() {
     assert!(true, "Memory service structure exists");
 }
 
-#[test] 
+#[test]
 fn test_memory_service_compiles() {
     // Test 2: Verify the memory service compiles successfully
     // This is a basic compilation test

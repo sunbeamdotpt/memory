@@ -2,11 +2,11 @@
 // model is loaded from disk exactly once regardless of how many EmbeddingService
 // instances are created.
 
-use fastembed::{EmbeddingModel, TextEmbedding, InitOptions};
-use thiserror::Error;
+use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
+use once_cell::sync::Lazy;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use once_cell::sync::Lazy;
+use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum EmbeddingError {
@@ -39,7 +39,7 @@ impl EmbeddingModelType {
     pub fn dimensions(&self) -> usize {
         match self {
             EmbeddingModelType::BgeBaseEnglish => 768,
-            EmbeddingModelType::CodeBert => 768,    // AllMpnetBaseV2
+            EmbeddingModelType::CodeBert => 768, // AllMpnetBaseV2
             EmbeddingModelType::GraphCodeBert => 768, // NomicEmbedTextV1
         }
     }
@@ -69,10 +69,15 @@ struct ModelCache {
 
 impl ModelCache {
     fn new() -> Self {
-        Self { models: HashMap::new() }
+        Self {
+            models: HashMap::new(),
+        }
     }
 
-    fn get_or_load(&mut self, model_type: EmbeddingModelType) -> Result<CachedModel, EmbeddingError> {
+    fn get_or_load(
+        &mut self,
+        model_type: EmbeddingModelType,
+    ) -> Result<CachedModel, EmbeddingError> {
         if let Some(model) = self.models.get(&model_type) {
             return Ok(Arc::clone(model));
         }
@@ -80,9 +85,9 @@ impl ModelCache {
         let cache_dir = crate::paths::model_cache_dir();
         std::fs::create_dir_all(&cache_dir).ok();
         let text_embedding = TextEmbedding::try_new(
-            InitOptions::new(model_type.to_fastembed_model())
-                .with_cache_dir(cache_dir)
-        ).map_err(|e| EmbeddingError::LoadError(e.to_string()))?;
+            InitOptions::new(model_type.to_fastembed_model()).with_cache_dir(cache_dir),
+        )
+        .map_err(|e| EmbeddingError::LoadError(e.to_string()))?;
 
         let model = Arc::new(Mutex::new(text_embedding));
         self.models.insert(model_type, Arc::clone(&model));
@@ -106,7 +111,11 @@ impl EmbeddingService {
     /// only happens the first time a given model type is requested.
     pub async fn new(model_type: EmbeddingModelType) -> Result<Self, EmbeddingError> {
         let model = MODEL_CACHE.lock().unwrap().get_or_load(model_type)?;
-        Ok(Self { model, model_type, query_cache: Arc::new(Mutex::new(HashMap::new())) })
+        Ok(Self {
+            model,
+            model_type,
+            query_cache: Arc::new(Mutex::new(HashMap::new())),
+        })
     }
 
     /// Generate embeddings using the cached model (runs in spawn_blocking).
@@ -117,7 +126,10 @@ impl EmbeddingService {
         {
             let cache = self.query_cache.lock().unwrap();
             if texts.iter().all(|t| cache.contains_key(*t)) {
-                return Ok(texts.iter().map(|t| cache.get(*t).unwrap().clone()).collect());
+                return Ok(texts
+                    .iter()
+                    .map(|t| cache.get(*t).unwrap().clone())
+                    .collect());
             }
         }
 
@@ -126,7 +138,9 @@ impl EmbeddingService {
         let texts_for_cache = texts.clone();
         let embeddings = tokio::task::spawn_blocking(move || {
             let texts_refs: Vec<&str> = texts.iter().map(|s| s.as_str()).collect();
-            model.lock().unwrap()
+            model
+                .lock()
+                .unwrap()
                 .embed(&texts_refs, None)
                 .map_err(|e| EmbeddingError::GenerationError(e.to_string()))
         })

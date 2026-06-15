@@ -1,9 +1,9 @@
 // Logging module for MCP Server
+use chrono::Local;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
-use chrono::Local;
 
 /// Simple file logger that holds an open file handle.
 #[derive(Clone)]
@@ -25,11 +25,11 @@ impl FileLogger {
             file: Arc::new(Mutex::new(file)),
         }
     }
-    
+
     pub fn log(&self, method: &str, path: &str, status: &str) {
         let timestamp = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
         let log_entry = format!("{} {} {} {}\n", timestamp, method, path, status);
-        
+
         if let Ok(mut file) = self.file.lock() {
             let _ = file.write_all(log_entry.as_bytes());
         }

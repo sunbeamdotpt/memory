@@ -11,10 +11,10 @@ pub fn scan_target(path: &Path) -> Result<Vec<PathBuf>> {
     let mut files = Vec::new();
 
     for result in ignore::WalkBuilder::new(path)
-        .hidden(false)           // we want hidden files unless gitignore excludes them
-        .git_ignore(true)        // respect .gitignore
-        .git_global(true)        // respect global gitignore
-        .git_exclude(true)       // respect .git/info/exclude
+        .hidden(false) // we want hidden files unless gitignore excludes them
+        .git_ignore(true) // respect .gitignore
+        .git_global(true) // respect global gitignore
+        .git_exclude(true) // respect .git/info/exclude
         .follow_links(false)
         .build()
     {
@@ -24,9 +24,7 @@ pub fn scan_target(path: &Path) -> Result<Vec<PathBuf>> {
         };
         // Skip .git directories — ignore::WalkBuilder respects .gitignore
         // but does not automatically exclude .git/ internals.
-        if entry.path().components().any(|c| {
-            c.as_os_str() == ".git"
-        }) {
+        if entry.path().components().any(|c| c.as_os_str() == ".git") {
             continue;
         }
         if entry.file_type().map(|t| t.is_file()).unwrap_or(false) {
@@ -68,15 +66,11 @@ pub fn is_likely_binary(path: &Path) -> bool {
 
 fn has_binary_extension(path: &Path) -> bool {
     const BINARY_EXTS: &[&str] = &[
-        "exe", "dll", "so", "dylib", "bin", "o", "a", "obj",
-        "png", "jpg", "jpeg", "gif", "bmp", "ico", "webp", "avif",
-        "mp3", "mp4", "wav", "avi", "mov", "mkv", "flac", "ogg",
-        "zip", "tar", "gz", "bz2", "xz", "7z", "rar", "br",
-        "doc", "docx", "xls", "xlsx", "ppt", "pptx",
-        "ttf", "otf", "woff", "woff2", "eot",
-        "class", "jar", "war", "pyc", "pyo", "wasm",
-        "db", "sqlite", "sqlite3", "mdb", "accdb",
-        "iso", "dmg", "img", "vmdk",
+        "exe", "dll", "so", "dylib", "bin", "o", "a", "obj", "png", "jpg", "jpeg", "gif", "bmp",
+        "ico", "webp", "avif", "mp3", "mp4", "wav", "avi", "mov", "mkv", "flac", "ogg", "zip",
+        "tar", "gz", "bz2", "xz", "7z", "rar", "br", "doc", "docx", "xls", "xlsx", "ppt", "pptx",
+        "ttf", "otf", "woff", "woff2", "eot", "class", "jar", "war", "pyc", "pyo", "wasm", "db",
+        "sqlite", "sqlite3", "mdb", "accdb", "iso", "dmg", "img", "vmdk",
     ];
 
     if let Some(ext) = path.extension() {
@@ -96,21 +90,21 @@ fn has_binary_magic(buf: &[u8]) -> bool {
 
     match &buf[..4] {
         // Images
-        b"\x89PNG" => true,                    // PNG
-        [0xFF, 0xD8, 0xFF, ..] => true,       // JPEG
-        b"GIF8" => true,                       // GIF
-        b"RIFF" => true,                       // WEBP / WAV (RIFF container)
-        b"MM\x00*" | b"II*\x00" => true,      // TIFF
-        b"BM\x00\x00" | b"BM\x36\x00" => true, // BMP
+        b"\x89PNG" => true,                                // PNG
+        [0xFF, 0xD8, 0xFF, ..] => true,                    // JPEG
+        b"GIF8" => true,                                   // GIF
+        b"RIFF" => true,                                   // WEBP / WAV (RIFF container)
+        b"MM\x00*" | b"II*\x00" => true,                   // TIFF
+        b"BM\x00\x00" | b"BM\x36\x00" => true,             // BMP
         b"\x00\x00\x01\x00" | b"\x00\x00\x02\x00" => true, // ICO
 
         // Archives / containers
-        b"PK\x03\x04" => true,                 // ZIP (also docx, xlsx, jar)
-        [0x1F, 0x8B, ..] => true,              // GZIP
-        b"BZh" => true,                        // BZIP2
-        [0xFD, 0x37, 0x7A, 0x58] => true,      // XZ
-        [0x52, 0x61, 0x72, 0x21] => true,      // RAR v4
-        b"7z\xBC\xAF" => true,                 // 7z
+        b"PK\x03\x04" => true,            // ZIP (also docx, xlsx, jar)
+        [0x1F, 0x8B, ..] => true,         // GZIP
+        b"BZh" => true,                   // BZIP2
+        [0xFD, 0x37, 0x7A, 0x58] => true, // XZ
+        [0x52, 0x61, 0x72, 0x21] => true, // RAR v4
+        b"7z\xBC\xAF" => true,            // 7z
 
         // Executables / libraries
         [0x7F, b'E', b'L', b'F'] => true,      // ELF
@@ -120,17 +114,17 @@ fn has_binary_magic(buf: &[u8]) -> bool {
         [0xFE, 0xED, 0xFA, 0xCF] => true,      // Mach-O 64-bit (big-endian)
 
         // Documents
-        b"%PDF" => true,                       // PDF
-        b"\xD0\xCF\x11\xE0" => true,           // OLE2 (old Office docs)
+        b"%PDF" => true,             // PDF
+        b"\xD0\xCF\x11\xE0" => true, // OLE2 (old Office docs)
 
         // Audio / Video
-        b"ID3" => true,                        // MP3 with ID3v2
+        b"ID3" => true, // MP3 with ID3v2
         [0xFF, 0xFB, ..] | [0xFF, 0xF3, ..] | [0xFF, 0xF2, ..] => true, // MP3 without ID3
-        b"ftyp" => true,                       // MP4 / MOV (if offset 4)
-        b"\x1A\x45\xDF\xA3" => true,           // MKV / WebM (EBML)
+        b"ftyp" => true, // MP4 / MOV (if offset 4)
+        b"\x1A\x45\xDF\xA3" => true, // MKV / WebM (EBML)
 
         // Database / misc
-        b"SQLite" => true,                     // SQLite 3
+        b"SQLite" => true, // SQLite 3
 
         _ => false,
     }

@@ -1,5 +1,5 @@
 use crate::error::{Result, ServerError};
-use crate::indexer::{scanner, target::*, IndexProgress as IndexProgressType};
+use crate::indexer::{IndexProgress as IndexProgressType, scanner, target::*};
 use crate::memory::service::MemoryService;
 use crossbeam_channel::Receiver;
 use std::path::PathBuf;
@@ -38,7 +38,11 @@ pub struct IndexService {
 }
 
 impl IndexService {
-    pub fn new(memory: MemoryService, event_rx: Receiver<IngestionEvent>, watcher: super::watcher::IndexWatcher) -> Self {
+    pub fn new(
+        memory: MemoryService,
+        event_rx: Receiver<IngestionEvent>,
+        watcher: super::watcher::IndexWatcher,
+    ) -> Self {
         Self {
             memory,
             event_rx: Arc::new(TokioMutex::new(Some(event_rx))),
@@ -80,7 +84,9 @@ impl IndexService {
                     last_event = std::time::Instant::now();
                 }
                 Err(crossbeam_channel::TryRecvError::Empty) => {
-                    if !pending.is_empty() && last_event.elapsed().as_millis() >= DEBOUNCE_MS as u128 {
+                    if !pending.is_empty()
+                        && last_event.elapsed().as_millis() >= DEBOUNCE_MS as u128
+                    {
                         let batch = std::mem::take(&mut pending);
                         self.process_batch(batch).await;
                     } else {
@@ -105,13 +111,20 @@ impl IndexService {
             Ok(t) => t,
             Err(e) => {
                 let err_id = Ulid::new().to_string();
-                let _ = self.memory.log_error(&err_id, "indexer", "error", &format!("failed to list targets: {e}"), None);
+                let _ = self.memory.log_error(
+                    &err_id,
+                    "indexer",
+                    "error",
+                    &format!("failed to list targets: {e}"),
+                    None,
+                );
                 return;
             }
         };
 
         // Group events by target_id
-        let mut by_target: std::collections::HashMap<String, Vec<IngestionEvent>> = std::collections::HashMap::new();
+        let mut by_target: std::collections::HashMap<String, Vec<IngestionEvent>> =
+            std::collections::HashMap::new();
         for event in events {
             let path = event.path().clone();
             for target in &targets {
@@ -130,13 +143,23 @@ impl IndexService {
         for (target_id, target_events) in by_target {
             if let Err(e) = self.process_target_events(&target_id, target_events).await {
                 let err_id = Ulid::new().to_string();
-                let _ = self.memory.log_error(&err_id, "indexer", "error", &format!("error processing target {target_id}"), Some(&e.to_string()));
+                let _ = self.memory.log_error(
+                    &err_id,
+                    "indexer",
+                    "error",
+                    &format!("error processing target {target_id}"),
+                    Some(&e.to_string()),
+                );
             }
         }
     }
 
     /// Process events for a single target.
-    async fn process_target_events(&self, target_id: &str, events: Vec<IngestionEvent>) -> Result<()> {
+    async fn process_target_events(
+        &self,
+        target_id: &str,
+        events: Vec<IngestionEvent>,
+    ) -> Result<()> {
         let target = match self.get_target(target_id).await? {
             Some(t) => t,
             None => return Ok(()),
@@ -164,10 +187,14 @@ impl IndexService {
                     let urn = if let Some(ref git) = git_state {
                         let rel = path.strip_prefix(&git.repo_root).unwrap_or(&path);
                         crate::urn::SourceUrn::build_git_urn(
-                            &git.host, git.org.as_deref(), &git.repo,
-                            &git.branch, &rel.to_string_lossy().replace('\\', "/"),
+                            &git.host,
+                            git.org.as_deref(),
+                            &git.repo,
+                            &git.branch,
+                            &rel.to_string_lossy().replace('\\', "/"),
                             None,
-                        ).unwrap_or_else(|_| format!("urn:smem:code:fs:{}", path.display()))
+                        )
+                        .unwrap_or_else(|_| format!("urn:smem:code:fs:{}", path.display()))
                     } else {
                         format!("urn:smem:code:fs:{}", path.display())
                     };
@@ -183,7 +210,13 @@ impl IndexService {
                     // Create or Modify: read file, hash, ingest
                     if let Err(e) = self.ingest_file(path, &target, git_state.as_ref()).await {
                         let err_id = Ulid::new().to_string();
-                        let _ = self.memory.log_error(&err_id, "indexer", "error", &format!("event ingest failed for {}", path.display()), Some(&e.to_string()));
+                        let _ = self.memory.log_error(
+                            &err_id,
+                            "indexer",
+                            "error",
+                            &format!("event ingest failed for {}", path.display()),
+                            Some(&e.to_string()),
+                        );
                     }
                 }
             }
@@ -193,13 +226,30 @@ impl IndexService {
     }
 
     /// Read a file, compute its hash, and add or update the corresponding fact.
-    async fn ingest_file(&self, path: &PathBuf, target: &IngestionTarget, git_state: Option<&crate::indexer::GitState>) -> Result<()> {
+    async fn ingest_file(
+        &self,
+        path: &PathBuf,
+        target: &IngestionTarget,
+        git_state: Option<&crate::indexer::GitState>,
+    ) -> Result<()> {
         let path_for_extract = path.clone();
-        let content = match tokio::task::spawn_blocking(move || crate::indexer::extract::extract_text(&path_for_extract)).await {
+        let content = match tokio::task::spawn_blocking(move || {
+            crate::indexer::extract::extract_text(&path_for_extract)
+        })
+        .await
+        {
             Ok(Ok(c)) => c,
             Ok(Err(e)) => return Err(e),
-            Err(e) if e.is_cancelled() => return Err(ServerError::DatabaseError("extraction task cancelled".to_string())),
-            Err(e) => return Err(ServerError::DatabaseError(format!("extraction task panicked: {e}"))),
+            Err(e) if e.is_cancelled() => {
+                return Err(ServerError::DatabaseError(
+                    "extraction task cancelled".to_string(),
+                ));
+            }
+            Err(e) => {
+                return Err(ServerError::DatabaseError(format!(
+                    "extraction task panicked: {e}"
+                )));
+            }
         };
 
         if content.is_empty() {
@@ -213,10 +263,14 @@ impl IndexService {
         let urn = if let Some(git) = git_state {
             let rel = path.strip_prefix(&git.repo_root).unwrap_or(&path);
             crate::urn::SourceUrn::build_git_urn(
-                &git.host, git.org.as_deref(), &git.repo,
-                &git.branch, &rel.to_string_lossy().replace('\\', "/"),
+                &git.host,
+                git.org.as_deref(),
+                &git.repo,
+                &git.branch,
+                &rel.to_string_lossy().replace('\\', "/"),
                 None,
-            ).unwrap_or_else(|_| format!("urn:smem:code:fs:{}", path.display()))
+            )
+            .unwrap_or_else(|_| format!("urn:smem:code:fs:{}", path.display()))
         } else {
             format!("urn:smem:code:fs:{}", path.display())
         };
@@ -231,10 +285,14 @@ impl IndexService {
 
         if let Some(fact) = existing_fact {
             // Same branch: update in place (MemoryService handles re-embedding)
-            self.memory.update_fact(&fact.id, &content, Some(&urn)).await?;
+            self.memory
+                .update_fact(&fact.id, &content, Some(&urn))
+                .await?;
         } else {
             // New branch or new file: create new fact
-            self.memory.add_fact(&target.namespace, &content, Some(&urn)).await?;
+            self.memory
+                .add_fact(&target.namespace, &content, Some(&urn))
+                .await?;
         }
 
         Ok(())
@@ -247,11 +305,18 @@ impl IndexService {
     /// If `path` contains glob meta-characters (`*`, `?`, `[`), it is expanded
     /// and a target is created for every match.  Otherwise a single target is
     /// created for the literal path.
-    pub async fn add_target(&self, path: &str, namespace: Option<&str>, target_type: Option<&str>) -> Result<Vec<String>> {
+    pub async fn add_target(
+        &self,
+        path: &str,
+        namespace: Option<&str>,
+        target_type: Option<&str>,
+    ) -> Result<Vec<String>> {
         // Expand globs if the pattern contains meta-characters
         let paths: Vec<PathBuf> = if is_glob(path) {
             glob::glob(path)
-                .map_err(|e| ServerError::InvalidArgument(format!("invalid glob pattern '{}': {}", path, e)))?
+                .map_err(|e| {
+                    ServerError::InvalidArgument(format!("invalid glob pattern '{}': {}", path, e))
+                })?
                 .filter_map(|r| r.ok())
                 .filter(|p| p.exists())
                 .collect()
@@ -260,7 +325,10 @@ impl IndexService {
         };
 
         if paths.is_empty() {
-            return Err(ServerError::InvalidArgument(format!("glob pattern matched no paths: {}", path)));
+            return Err(ServerError::InvalidArgument(format!(
+                "glob pattern matched no paths: {}",
+                path
+            )));
         }
 
         let mut ids = Vec::with_capacity(paths.len());
@@ -273,7 +341,9 @@ impl IndexService {
 
             // Auto-detect target type
             let detected_type = match target_type {
-                Some(t) => TargetType::from_str(t).ok_or_else(|| ServerError::InvalidArgument(format!("invalid target_type: {}", t)))?,
+                Some(t) => TargetType::from_str(t).ok_or_else(|| {
+                    ServerError::InvalidArgument(format!("invalid target_type: {}", t))
+                })?,
                 None => {
                     if path_buf.is_file() {
                         TargetType::File
@@ -310,7 +380,10 @@ impl IndexService {
             }
 
             // Start watching the path
-            self.watcher.lock().await.add_target(id.clone(), &path_buf)?;
+            self.watcher
+                .lock()
+                .await
+                .add_target(id.clone(), &path_buf)?;
             ids.push(id);
         }
 
@@ -341,7 +414,12 @@ impl IndexService {
     pub async fn sync_target(&self, target_id: &str) -> Result<()> {
         let target = match self.get_target(target_id).await? {
             Some(t) => t,
-            None => return Err(ServerError::NotFound(format!("target not found: {}", target_id))),
+            None => {
+                return Err(ServerError::NotFound(format!(
+                    "target not found: {}",
+                    target_id
+                )));
+            }
         };
 
         let target_path = PathBuf::from(&target.path);
@@ -362,7 +440,13 @@ impl IndexService {
 
             if let Err(e) = self.ingest_file(file, &target, git_state.as_ref()).await {
                 let err_id = Ulid::new().to_string();
-                let _ = self.memory.log_error(&err_id, "indexer", "error", &format!("sync ingest failed for {}", file.display()), Some(&e.to_string()));
+                let _ = self.memory.log_error(
+                    &err_id,
+                    "indexer",
+                    "error",
+                    &format!("sync ingest failed for {}", file.display()),
+                    Some(&e.to_string()),
+                );
                 self.progress.update(target_id, |p| {
                     p.files_failed += 1;
                     p.last_error = Some(e.to_string());

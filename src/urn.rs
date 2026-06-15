@@ -53,8 +53,7 @@
 /// urn:smem:note:manual:2026-03-04/onboarding-session
 /// urn:smem:conf:fs:/etc/myapp/config.toml
 /// ```
-
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 // ── constants ─────────────────────────────────────────────────────────────────
 
@@ -138,12 +137,12 @@ impl ContentType {
     fn parse(s: &str) -> Result<Self, UrnError> {
         match s {
             "code" => Ok(Self::Code),
-            "doc"  => Ok(Self::Doc),
-            "web"  => Ok(Self::Web),
+            "doc" => Ok(Self::Doc),
+            "web" => Ok(Self::Web),
             "data" => Ok(Self::Data),
             "note" => Ok(Self::Note),
             "conf" => Ok(Self::Conf),
-            other  => Err(UrnError(format!(
+            other => Err(UrnError(format!(
                 "unknown content type {other:?}; valid: code, doc, web, data, note, conf"
             ))),
         }
@@ -152,8 +151,8 @@ impl ContentType {
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Code => "code",
-            Self::Doc  => "doc",
-            Self::Web  => "web",
+            Self::Doc => "doc",
+            Self::Web => "web",
             Self::Data => "data",
             Self::Note => "note",
             Self::Conf => "conf",
@@ -163,8 +162,8 @@ impl ContentType {
     fn label(&self) -> &'static str {
         match self {
             Self::Code => "source code",
-            Self::Doc  => "documentation",
-            Self::Web  => "web page",
+            Self::Doc => "documentation",
+            Self::Web => "web page",
             Self::Data => "data record",
             Self::Note => "note",
             Self::Conf => "configuration",
@@ -175,14 +174,14 @@ impl ContentType {
 impl Origin {
     fn parse(s: &str) -> Result<Self, UrnError> {
         match s {
-            "git"    => Ok(Self::Git),
-            "fs"     => Ok(Self::Fs),
-            "https"  => Ok(Self::Https),
-            "http"   => Ok(Self::Http),
-            "db"     => Ok(Self::Db),
-            "api"    => Ok(Self::Api),
+            "git" => Ok(Self::Git),
+            "fs" => Ok(Self::Fs),
+            "https" => Ok(Self::Https),
+            "http" => Ok(Self::Http),
+            "db" => Ok(Self::Db),
+            "api" => Ok(Self::Api),
             "manual" => Ok(Self::Manual),
-            other    => Err(UrnError(format!(
+            other => Err(UrnError(format!(
                 "unknown origin {other:?}; valid: git, fs, https, http, db, api, manual"
             ))),
         }
@@ -190,23 +189,23 @@ impl Origin {
 
     pub fn as_str(&self) -> &'static str {
         match self {
-            Self::Git    => "git",
-            Self::Fs     => "fs",
-            Self::Https  => "https",
-            Self::Http   => "http",
-            Self::Db     => "db",
-            Self::Api    => "api",
+            Self::Git => "git",
+            Self::Fs => "fs",
+            Self::Https => "https",
+            Self::Http => "http",
+            Self::Db => "db",
+            Self::Api => "api",
             Self::Manual => "manual",
         }
     }
 
     fn label(&self) -> &'static str {
         match self {
-            Self::Git    => "git repository",
-            Self::Fs     => "local file",
+            Self::Git => "git repository",
+            Self::Fs => "local file",
             Self::Https | Self::Http => "web URL",
-            Self::Db     => "database",
-            Self::Api    => "API endpoint",
+            Self::Db => "database",
+            Self::Api => "API endpoint",
             Self::Manual => "manually authored",
         }
     }
@@ -230,7 +229,9 @@ impl SourceUrn {
         }
         if let Some(f) = fragment {
             if f.is_empty() {
-                return Err(UrnError("fragment must not be empty if provided".to_string()));
+                return Err(UrnError(
+                    "fragment must not be empty if provided".to_string(),
+                ));
             }
         }
         let urn = Self {
@@ -246,9 +247,9 @@ impl SourceUrn {
     ///
     /// Returns `UrnError` with a human-readable message on any malformed input.
     pub fn parse(input: &str) -> Result<Self, UrnError> {
-        let rest = input.strip_prefix(PREFIX).ok_or_else(|| {
-            UrnError(format!("must start with '{PREFIX}'; got {input:?}"))
-        })?;
+        let rest = input
+            .strip_prefix(PREFIX)
+            .ok_or_else(|| UrnError(format!("must start with '{PREFIX}'; got {input:?}")))?;
 
         // Fragment splits on the first '#'; the fragment may itself contain '#'.
         let (body, fragment) = match rest.split_once('#') {
@@ -262,11 +263,17 @@ impl SourceUrn {
         // body = <type>:<origin>:<locator>
         // splitn(3) so that the locator can itself contain colons (e.g. fs paths, db URIs).
         let mut parts = body.splitn(3, ':');
-        let type_str   = parts.next().filter(|s| !s.is_empty())
+        let type_str = parts
+            .next()
+            .filter(|s| !s.is_empty())
             .ok_or_else(|| UrnError("missing <type> component".to_string()))?;
-        let origin_str = parts.next().filter(|s| !s.is_empty())
+        let origin_str = parts
+            .next()
+            .filter(|s| !s.is_empty())
             .ok_or_else(|| UrnError("missing <origin> component".to_string()))?;
-        let locator    = parts.next().filter(|s| !s.is_empty())
+        let locator = parts
+            .next()
+            .filter(|s| !s.is_empty())
             .ok_or_else(|| UrnError("missing <locator> component".to_string()))?;
 
         Ok(Self {
@@ -279,12 +286,18 @@ impl SourceUrn {
 
     /// Reconstitute the canonical URN string.
     pub fn to_urn(&self) -> String {
-        let frag = self.fragment.as_deref()
+        let frag = self
+            .fragment
+            .as_deref()
             .map(|f| format!("#{f}"))
             .unwrap_or_default();
         format!(
             "{}{}:{}:{}{}",
-            PREFIX, self.content_type.as_str(), self.origin.as_str(), self.locator, frag
+            PREFIX,
+            self.content_type.as_str(),
+            self.origin.as_str(),
+            self.locator,
+            frag
         )
     }
 
@@ -303,13 +316,16 @@ impl SourceUrn {
 
     pub fn human_readable(&self) -> String {
         let frag = match &self.fragment {
-            None    => String::new(),
+            None => String::new(),
             Some(f) if f.starts_with('L') => format!(" ({})", f.replace('-', "–")),
             Some(f) => format!(" §{f}"),
         };
         format!(
             "{} from {}: {}{}",
-            self.content_type.label(), self.origin.label(), self.locator, frag
+            self.content_type.label(),
+            self.origin.label(),
+            self.locator,
+            frag
         )
     }
 
@@ -320,22 +336,22 @@ impl SourceUrn {
         if self.origin != Origin::Git {
             return false;
         }
-        
+
         // Split by colon to parse ARN-like format
         let parts: Vec<&str> = self.locator.split(':').collect();
-        
+
         // Minimum valid format: host::repo:branch:path (5 parts)
         // Or: host:org:repo:branch:path (6+ parts)
         if parts.len() < 5 {
             return false;
         }
-        
+
         // Validate required components are not empty
         // parts[0] = host, parts[2] = repo, parts[3] = branch, parts[4..] = path
-        parts[0].is_empty() == false && 
-        parts[2].is_empty() == false && 
-        parts[3].is_empty() == false && 
-        parts[4..].join(":").is_empty() == false
+        parts[0].is_empty() == false
+            && parts[2].is_empty() == false
+            && parts[3].is_empty() == false
+            && parts[4..].join(":").is_empty() == false
     }
 
     /// Extract host from git locator (ARN-like format: host:org:repo:branch:path)
@@ -343,7 +359,7 @@ impl SourceUrn {
         if !self.is_valid_git_urn() {
             return None;
         }
-        
+
         let parts: Vec<&str> = self.locator.split(':').collect();
         Some(parts[0])
     }
@@ -353,9 +369,9 @@ impl SourceUrn {
         if !self.is_valid_git_urn() {
             return None;
         }
-        
+
         let parts: Vec<&str> = self.locator.split(':').collect();
-        
+
         // parts[1] is org field - empty string means no org
         if parts[1].is_empty() {
             None
@@ -369,9 +385,9 @@ impl SourceUrn {
         if !self.is_valid_git_urn() {
             return None;
         }
-        
+
         let parts: Vec<&str> = self.locator.split(':').collect();
-        
+
         // parts[2] is always the repo name
         Some(parts[2])
     }
@@ -381,9 +397,9 @@ impl SourceUrn {
         if !self.is_valid_git_urn() {
             return None;
         }
-        
+
         let parts: Vec<&str> = self.locator.split(':').collect();
-        
+
         // parts[3] is always the branch name
         Some(parts[3])
     }
@@ -393,9 +409,9 @@ impl SourceUrn {
         if !self.is_valid_git_urn() {
             return None;
         }
-        
+
         let parts: Vec<&str> = self.locator.split(':').collect();
-        
+
         // parts[4..] is the path - join with : to preserve any colons in the path
         // This handles paths like "src:lib.rs" (though rare)
         Some(parts[4..].join(":"))
@@ -408,7 +424,7 @@ impl SourceUrn {
         repo: &str,
         branch: &str,
         path: &str,
-        fragment: Option<&str>
+        fragment: Option<&str>,
     ) -> Result<String, UrnError> {
         // Validate required components
         if host.is_empty() {
@@ -423,11 +439,11 @@ impl SourceUrn {
         if path.is_empty() {
             return Err(UrnError("path cannot be empty".to_string()));
         }
-        
+
         // Build locator: host:org:repo:branch:path
         let org_part = org.unwrap_or("");
         let locator = format!("{}:{}:{}:{}:{}", host, org_part, repo, branch, path);
-        
+
         // Build full URN
         let fragment_part = fragment.map(|f| format!("#{}", f)).unwrap_or_default();
         Ok(format!("urn:smem:code:git:{}{}", locator, fragment_part))
@@ -545,7 +561,10 @@ mod tests {
         let urn = SourceUrn::parse(s).unwrap();
         assert_eq!(urn.content_type, ContentType::Code);
         assert_eq!(urn.origin, Origin::Git);
-        assert_eq!(urn.locator, "github.com/acme/repo/refs/heads/main/src/lib.rs");
+        assert_eq!(
+            urn.locator,
+            "github.com/acme/repo/refs/heads/main/src/lib.rs"
+        );
         assert_eq!(urn.fragment.as_deref(), Some("L1-L50"));
         assert_eq!(urn.to_urn(), s);
     }
@@ -631,19 +650,24 @@ mod tests {
         assert!(s["fragment_shapes"].is_array());
         assert!(s["examples"].is_array());
         // fs origin should describe hostname support
-        let fs = s["origins"].as_array().unwrap()
+        let fs = s["origins"]
+            .as_array()
+            .unwrap()
             .iter()
             .find(|o| o["value"] == "fs")
             .expect("fs origin");
-        assert!(fs["note"].as_str().unwrap().contains("NAS") ||
-                fs["locator_shape"].as_str().unwrap().contains("hostname"));
+        assert!(
+            fs["note"].as_str().unwrap().contains("NAS")
+                || fs["locator_shape"].as_str().unwrap().contains("hostname")
+        );
     }
 
     #[test]
     fn human_readable_line_range() {
         let urn = SourceUrn::parse(
-            "urn:smem:code:git:github.com/acme/repo/refs/heads/main/src/lib.rs#L10-L30"
-        ).unwrap();
+            "urn:smem:code:git:github.com/acme/repo/refs/heads/main/src/lib.rs#L10-L30",
+        )
+        .unwrap();
         let desc = urn.human_readable();
         assert!(desc.contains("source code"));
         assert!(desc.contains("git repository"));
@@ -657,13 +681,13 @@ mod tests {
         // Test that the new format can be parsed at all
         let urn_str = "urn:smem:code:git:github.com:acme:repo:main:src/lib.rs#L1-L50";
         let urn = SourceUrn::parse(urn_str).unwrap();
-        
+
         // Verify basic parsing works
         assert_eq!(urn.content_type, ContentType::Code);
         assert_eq!(urn.origin, Origin::Git);
         assert_eq!(urn.locator, "github.com:acme:repo:main:src/lib.rs");
         assert_eq!(urn.fragment.as_deref(), Some("L1-L50"));
-        
+
         // Verify round-trip works
         assert_eq!(urn.to_urn(), urn_str);
     }
@@ -673,7 +697,7 @@ mod tests {
         // Test parsing without organization (double colon)
         let urn_str = "urn:smem:code:git:git.example.com::repo:main:src/lib.rs";
         let urn = SourceUrn::parse(urn_str).unwrap();
-        
+
         assert_eq!(urn.content_type, ContentType::Code);
         assert_eq!(urn.origin, Origin::Git);
         assert_eq!(urn.locator, "git.example.com::repo:main:src/lib.rs");
@@ -685,34 +709,37 @@ mod tests {
         // Standard format with all components
         let urn_str = "urn:smem:code:git:github.com:acme:repo:main:src/lib.rs#L1-L50";
         let urn = SourceUrn::parse(urn_str).unwrap();
-        
+
         // Verify basic parsing
         assert_eq!(urn.content_type, ContentType::Code);
         assert_eq!(urn.origin, Origin::Git);
         assert_eq!(urn.locator, "github.com:acme:repo:main:src/lib.rs");
         assert_eq!(urn.fragment.as_deref(), Some("L1-L50"));
-        
+
         // Verify round-trip
         assert_eq!(urn.to_urn(), urn_str);
     }
 
     #[test]
     fn test_git_urn_with_organization() {
-        let urn = SourceUrn::parse("urn:smem:code:git:github.com:acme:repo:main:src/lib.rs").unwrap();
+        let urn =
+            SourceUrn::parse("urn:smem:code:git:github.com:acme:repo:main:src/lib.rs").unwrap();
         assert_eq!(urn.extract_git_org(), Some("acme"));
     }
 
     #[test]
     fn test_git_urn_without_organization() {
         // Empty org field (double colon)
-        let urn = SourceUrn::parse("urn:smem:code:git:git.example.com::repo:main:src/lib.rs").unwrap();
+        let urn =
+            SourceUrn::parse("urn:smem:code:git:git.example.com::repo:main:src/lib.rs").unwrap();
         assert_eq!(urn.extract_git_org(), None);
     }
 
     #[test]
     fn test_git_urn_component_extraction() {
-        let urn = SourceUrn::parse("urn:smem:code:git:gitlab.com:company:project:dev:src/main.rs").unwrap();
-        
+        let urn = SourceUrn::parse("urn:smem:code:git:gitlab.com:company:project:dev:src/main.rs")
+            .unwrap();
+
         assert_eq!(urn.extract_git_host(), Some("gitlab.com"));
         assert_eq!(urn.extract_git_org(), Some("company"));
         assert_eq!(urn.extract_git_repo(), Some("project"));
@@ -723,14 +750,22 @@ mod tests {
     #[test]
     fn test_git_urn_path_preservation() {
         // Paths should preserve their natural / separators
-        let urn = SourceUrn::parse("urn:smem:code:git:github.com:acme:repo:main:src/components/Button.tsx").unwrap();
-        assert_eq!(urn.extract_git_path(), Some("src/components/Button.tsx".to_string()));
+        let urn = SourceUrn::parse(
+            "urn:smem:code:git:github.com:acme:repo:main:src/components/Button.tsx",
+        )
+        .unwrap();
+        assert_eq!(
+            urn.extract_git_path(),
+            Some("src/components/Button.tsx".to_string())
+        );
     }
 
     #[test]
     fn test_git_urn_branch_with_slashes() {
         // Feature branches often have slashes
-        let urn = SourceUrn::parse("urn:smem:code:git:github.com:acme:repo:feature/new-auth:src/auth.rs").unwrap();
+        let urn =
+            SourceUrn::parse("urn:smem:code:git:github.com:acme:repo:feature/new-auth:src/auth.rs")
+                .unwrap();
         assert_eq!(urn.extract_git_branch(), Some("feature/new-auth"));
     }
 
@@ -738,8 +773,13 @@ mod tests {
     fn test_git_urn_validation_valid_cases() {
         // All valid formats
         assert!(SourceUrn::parse("urn:smem:code:git:github.com:acme:repo:main:src/lib.rs").is_ok());
-        assert!(SourceUrn::parse("urn:smem:code:git:git.example.com::repo:main:src/lib.rs").is_ok());
-        assert!(SourceUrn::parse("urn:smem:code:git:github.com:acme:repo:feature/branch:src/file.rs").is_ok());
+        assert!(
+            SourceUrn::parse("urn:smem:code:git:git.example.com::repo:main:src/lib.rs").is_ok()
+        );
+        assert!(
+            SourceUrn::parse("urn:smem:code:git:github.com:acme:repo:feature/branch:src/file.rs")
+                .is_ok()
+        );
     }
 
     #[test]
@@ -747,17 +787,17 @@ mod tests {
         // Missing components - these should parse but be invalid
         let urn1 = SourceUrn::parse("urn:smem:code:git:github.com:acme:repo:main").unwrap(); // Missing path
         assert!(!urn1.is_valid_git_urn());
-        
+
         let urn2 = SourceUrn::parse("urn:smem:code:git:github.com:acme:repo").unwrap(); // Missing branch and path
         assert!(!urn2.is_valid_git_urn());
-        
+
         let urn3 = SourceUrn::parse("urn:smem:code:git:github.com:acme").unwrap(); // Missing repo, branch, path
         assert!(!urn3.is_valid_git_urn());
-        
+
         // Empty required components
         let urn4 = SourceUrn::parse("urn:smem:code:git::acme:repo:main:src/lib.rs").unwrap(); // Empty host
         assert!(!urn4.is_valid_git_urn());
-        
+
         let urn5 = SourceUrn::parse("urn:smem:code:git:github.com::::src/lib.rs").unwrap(); // Empty repo and branch
         assert!(!urn5.is_valid_git_urn());
     }
@@ -766,11 +806,11 @@ mod tests {
     fn test_git_urn_roundtrip_consistency() {
         // Parse -> Serialize -> Parse should be identical
         let original = "urn:smem:code:git:gitlab.com:company:project:feature/new-ui:src/components/Button.tsx#L42";
-        
+
         let parsed1 = SourceUrn::parse(original).unwrap();
         let serialized = parsed1.to_urn();
         let parsed2 = SourceUrn::parse(&serialized).unwrap();
-        
+
         assert_eq!(parsed1.locator, parsed2.locator);
         assert_eq!(parsed1.fragment, parsed2.fragment);
         assert_eq!(serialized, original);
@@ -784,39 +824,51 @@ mod tests {
             "repo",
             "main",
             "src/lib.rs",
-            Some("L10-L20")
-        ).unwrap();
-        
-        assert_eq!(urn, "urn:smem:code:git:github.com:acme:repo:main:src/lib.rs#L10-L20");
+            Some("L10-L20"),
+        )
+        .unwrap();
+
+        assert_eq!(
+            urn,
+            "urn:smem:code:git:github.com:acme:repo:main:src/lib.rs#L10-L20"
+        );
     }
 
     #[test]
     fn test_build_git_urn_without_organization() {
-        let urn = SourceUrn::build_git_urn(
-            "git.example.com",
-            None,
-            "repo",
-            "main",
-            "src/lib.rs",
-            None
-        ).unwrap();
-        
-        assert_eq!(urn, "urn:smem:code:git:git.example.com::repo:main:src/lib.rs");
+        let urn =
+            SourceUrn::build_git_urn("git.example.com", None, "repo", "main", "src/lib.rs", None)
+                .unwrap();
+
+        assert_eq!(
+            urn,
+            "urn:smem:code:git:git.example.com::repo:main:src/lib.rs"
+        );
     }
 
     #[test]
     fn test_build_git_urn_validation() {
         // Empty host
-        assert!(SourceUrn::build_git_urn("", Some("acme"), "repo", "main", "src/lib.rs", None).is_err());
-        
+        assert!(
+            SourceUrn::build_git_urn("", Some("acme"), "repo", "main", "src/lib.rs", None).is_err()
+        );
+
         // Empty repo
-        assert!(SourceUrn::build_git_urn("github.com", Some("acme"), "", "main", "src/lib.rs", None).is_err());
-        
+        assert!(
+            SourceUrn::build_git_urn("github.com", Some("acme"), "", "main", "src/lib.rs", None)
+                .is_err()
+        );
+
         // Empty branch
-        assert!(SourceUrn::build_git_urn("github.com", Some("acme"), "repo", "", "src/lib.rs", None).is_err());
-        
+        assert!(
+            SourceUrn::build_git_urn("github.com", Some("acme"), "repo", "", "src/lib.rs", None)
+                .is_err()
+        );
+
         // Empty path
-        assert!(SourceUrn::build_git_urn("github.com", Some("acme"), "repo", "main", "", None).is_err());
+        assert!(
+            SourceUrn::build_git_urn("github.com", Some("acme"), "repo", "main", "", None).is_err()
+        );
     }
 
     #[test]
@@ -860,7 +912,8 @@ mod tests {
 
     #[test]
     fn test_human_readable_slug_fragment() {
-        let urn = SourceUrn::parse("urn:smem:doc:https:docs.example.com/api#authentication").unwrap();
+        let urn =
+            SourceUrn::parse("urn:smem:doc:https:docs.example.com/api#authentication").unwrap();
         let desc = urn.human_readable();
         assert!(desc.contains("§authentication"));
     }

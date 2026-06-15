@@ -1,6 +1,6 @@
 use sunbeam_memory::config::MemoryConfig;
-use sunbeam_memory::error::ServerError;
 use sunbeam_memory::embedding::service::EmbeddingError;
+use sunbeam_memory::error::ServerError;
 
 #[test]
 fn test_config_default() {

@@ -2,7 +2,7 @@
 
 use crate::error::{Result, ServerError};
 use crate::semantic::SemanticFact;
-use rusqlite::{Connection, params, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension, params};
 use std::collections::HashMap;
 use std::path::Path;
 use ulid::Ulid;
@@ -29,7 +29,7 @@ impl SemanticDB {
         conn.execute_batch(
             "PRAGMA journal_mode = WAL;
              PRAGMA busy_timeout = 5000;
-             PRAGMA foreign_keys = ON;"
+             PRAGMA foreign_keys = ON;",
         )?;
 
         // Metadata table
@@ -183,11 +183,20 @@ impl SemanticDB {
             params![dimension.to_string()],
         )?;
 
-        Ok(Self { conn, dimension, index, key_to_fact, fact_to_key })
+        Ok(Self {
+            conn,
+            dimension,
+            index,
+            key_to_fact,
+            fact_to_key,
+        })
     }
 
     /// Load an existing USearch index from SQLite blob, or create a fresh one.
-    fn load_or_create_index(conn: &Connection, dimension: usize) -> Result<(usearch::Index, HashMap<u64, String>, HashMap<String, u64>)> {
+    fn load_or_create_index(
+        conn: &Connection,
+        dimension: usize,
+    ) -> Result<(usearch::Index, HashMap<u64, String>, HashMap<String, u64>)> {
         let mut options = usearch::IndexOptions::default();
         options.dimensions = dimension;
         options.metric = usearch::MetricKind::Cos;
@@ -198,11 +207,11 @@ impl SemanticDB {
 
         let index = usearch::new_index(&options)?;
 
-        let blob: Option<Vec<u8>> = conn.query_row(
-            "SELECT blob FROM _usearch_index WHERE id = 1",
-            [],
-            |row| row.get(0),
-        ).optional()?;
+        let blob: Option<Vec<u8>> = conn
+            .query_row("SELECT blob FROM _usearch_index WHERE id = 1", [], |row| {
+                row.get(0)
+            })
+            .optional()?;
 
         if let Some(data) = blob {
             if !data.is_empty() {
@@ -211,11 +220,9 @@ impl SemanticDB {
         }
 
         // Reserve capacity after loading — load_from_buffer overwrites reservations.
-        let existing_count: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM _usearch_keys",
-            [],
-            |row| row.get(0),
-        ).unwrap_or(0);
+        let existing_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM _usearch_keys", [], |row| row.get(0))
+            .unwrap_or(0);
         let reserve = (existing_count + 1000) as usize;
         index.reserve(reserve)?;
 
@@ -268,17 +275,13 @@ impl SemanticDB {
 
     /// Backfill fts_facts for existing databases that predate the FTS5 index.
     fn maybe_migrate_fts(conn: &Connection) -> Result<()> {
-        let fts_count: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM fts_facts",
-            [],
-            |row| row.get(0),
-        ).unwrap_or(0);
+        let fts_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM fts_facts", [], |row| row.get(0))
+            .unwrap_or(0);
 
-        let facts_count: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM facts",
-            [],
-            |row| row.get(0),
-        ).unwrap_or(0);
+        let facts_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM facts", [], |row| row.get(0))
+            .unwrap_or(0);
 
         if fts_count == 0 && facts_count > 0 {
             conn.execute(
@@ -318,7 +321,13 @@ impl SemanticDB {
         let tx = self.conn.transaction()?;
         tx.execute(
             "INSERT INTO facts (id, namespace, content, created_at, source) VALUES (?, ?, ?, ?, ?)",
-            params![&fact_id, &fact.namespace, &fact.content, timestamp, &fact.source],
+            params![
+                &fact_id,
+                &fact.namespace,
+                &fact.content,
+                timestamp,
+                &fact.source
+            ],
         )?;
         tx.execute(
             "INSERT INTO _usearch_keys (ukey, fact_id) VALUES (?, ?)",
@@ -351,33 +360,35 @@ impl SemanticDB {
 
     /// Get a fact by ID, including its embedding.
     pub fn get_fact(&self, fact_id: &str) -> Result<Option<SemanticFact>> {
-        let fact = self.conn.query_row(
-            "SELECT id, namespace, content, created_at, source FROM facts WHERE id = ?",
-            params![fact_id],
-            |row| {
-                Ok(SemanticFact {
-                    id: row.get(0)?,
-                    namespace: row.get(1)?,
-                    content: row.get(2)?,
-                    created_at: row.get(3)?,
-                    embedding: vec![],
-                    source: row.get(4)?,
-                })
-            },
-        ).optional()?;
+        let fact = self
+            .conn
+            .query_row(
+                "SELECT id, namespace, content, created_at, source FROM facts WHERE id = ?",
+                params![fact_id],
+                |row| {
+                    Ok(SemanticFact {
+                        id: row.get(0)?,
+                        namespace: row.get(1)?,
+                        content: row.get(2)?,
+                        created_at: row.get(3)?,
+                        embedding: vec![],
+                        source: row.get(4)?,
+                    })
+                },
+            )
+            .optional()?;
 
         match fact {
             Some(mut f) => {
-                let ukey = self.fact_to_key.get(fact_id)
-                    .ok_or_else(|| ServerError::DatabaseError(
-                        format!("missing usearch key for fact {fact_id}")
-                    ))?;
+                let ukey = self.fact_to_key.get(fact_id).ok_or_else(|| {
+                    ServerError::DatabaseError(format!("missing usearch key for fact {fact_id}"))
+                })?;
                 let mut vec = Vec::new();
                 let found = self.index.export(*ukey, &mut vec)?;
                 if found == 0 {
-                    return Err(ServerError::DatabaseError(
-                        format!("missing embedding for fact {fact_id}")
-                    ));
+                    return Err(ServerError::DatabaseError(format!(
+                        "missing embedding for fact {fact_id}"
+                    )));
                 }
                 f.embedding = vec;
                 Ok(Some(f))
@@ -487,9 +498,18 @@ impl SemanticDB {
     }
 
     /// BM25 keyword search via FTS5. Returns facts ordered by BM25 rank (best first).
-    pub fn search_bm25(&self, query: &str, limit: usize, namespace_filter: Option<&str>) -> Result<Vec<SemanticFact>> {
+    pub fn search_bm25(
+        &self,
+        query: &str,
+        limit: usize,
+        namespace_filter: Option<&str>,
+    ) -> Result<Vec<SemanticFact>> {
         let sanitized = sanitize_fts5_query(query);
-        let raw_query = if sanitized.trim().is_empty() { query } else { &sanitized };
+        let raw_query = if sanitized.trim().is_empty() {
+            query
+        } else {
+            &sanitized
+        };
 
         let mut results = Vec::new();
 
@@ -500,7 +520,7 @@ impl SemanticDB {
                  JOIN facts f ON f.rowid = fts.rowid
                  WHERE fts.content MATCH ? AND f.namespace = ? AND (f.stale = 0 OR f.stale IS NULL)
                  ORDER BY rank
-                 LIMIT ?"
+                 LIMIT ?",
             )?;
             let rows = stmt.query_map(params![raw_query, ns, limit as i64], |row| {
                 Ok(SemanticFact {
@@ -527,7 +547,7 @@ impl SemanticDB {
                  JOIN facts f ON f.rowid = fts.rowid
                  WHERE fts.content MATCH ? AND (f.stale = 0 OR f.stale IS NULL)
                  ORDER BY rank
-                 LIMIT ?"
+                 LIMIT ?",
             )?;
             let rows = stmt.query_map(params![raw_query, limit as i64], |row| {
                 Ok(SemanticFact {
@@ -571,7 +591,8 @@ impl SemanticDB {
         const RRF_K: f32 = 60.0;
         const FETCH_MULTIPLIER: usize = 3;
 
-        let vec_results = self.search_similar(query_embedding, limit * FETCH_MULTIPLIER, namespace_filter)?;
+        let vec_results =
+            self.search_similar(query_embedding, limit * FETCH_MULTIPLIER, namespace_filter)?;
         let bm25_results = self.search_bm25(query, limit * FETCH_MULTIPLIER, namespace_filter)?;
 
         let mut facts: HashMap<String, SemanticFact> =
@@ -584,8 +605,7 @@ impl SemanticDB {
             facts.entry(fact.id.clone()).or_insert_with(|| fact.clone());
         }
 
-        let mut rrf_scores: HashMap<String, f32> =
-            HashMap::with_capacity(facts.len());
+        let mut rrf_scores: HashMap<String, f32> = HashMap::with_capacity(facts.len());
 
         for (rank, (fact, _)) in vec_results.iter().enumerate() {
             let score = 1.0 / (RRF_K + rank as f32);
@@ -607,15 +627,19 @@ impl SemanticDB {
 
         Ok(scored
             .into_iter()
-            .filter_map(|(id, score)| {
-                facts.remove(&id).map(|f| (f, score))
-            })
+            .filter_map(|(id, score)| facts.remove(&id).map(|f| (f, score)))
             .collect())
     }
 
     /// Update content and/or source of an existing fact. Re-stores the embedding.
     /// Returns true if the fact existed.
-    pub fn update_fact(&mut self, fact_id: &str, content: &str, source: Option<&str>, embedding: &[f32]) -> Result<bool> {
+    pub fn update_fact(
+        &mut self,
+        fact_id: &str,
+        content: &str,
+        source: Option<&str>,
+        embedding: &[f32],
+    ) -> Result<bool> {
         if embedding.len() != self.dimension {
             return Err(ServerError::InvalidArgument(format!(
                 "embedding dimension {} does not match expected {}",
@@ -671,7 +695,10 @@ impl SemanticDB {
         self.index.remove(ukey)?;
 
         let tx = self.conn.transaction()?;
-        tx.execute("DELETE FROM _usearch_keys WHERE fact_id = ?", params![fact_id])?;
+        tx.execute(
+            "DELETE FROM _usearch_keys WHERE fact_id = ?",
+            params![fact_id],
+        )?;
         let count = tx.execute("DELETE FROM facts WHERE id = ?", params![fact_id])?;
 
         let len = self.index.serialized_length();
@@ -706,17 +733,18 @@ impl SemanticDB {
         };
         let mut stmt = self.conn.prepare(sql)?;
 
-        let facts = stmt.query_map([], |row| {
-            Ok(SemanticFact {
-                id: row.get(0)?,
-                namespace: row.get(1)?,
-                content: row.get(2)?,
-                created_at: row.get(3)?,
-                embedding: vec![],
-                source: row.get(4)?,
-            })
-        })?
-        .collect::<std::result::Result<Vec<_>, rusqlite::Error>>()?;
+        let facts = stmt
+            .query_map([], |row| {
+                Ok(SemanticFact {
+                    id: row.get(0)?,
+                    namespace: row.get(1)?,
+                    content: row.get(2)?,
+                    created_at: row.get(3)?,
+                    embedding: vec![],
+                    source: row.get(4)?,
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, rusqlite::Error>>()?;
 
         Ok(facts)
     }
@@ -801,7 +829,10 @@ impl SemanticDB {
         Ok(())
     }
 
-    pub fn get_ingestion_target(&self, id: &str) -> Result<Option<crate::indexer::IngestionTarget>> {
+    pub fn get_ingestion_target(
+        &self,
+        id: &str,
+    ) -> Result<Option<crate::indexer::IngestionTarget>> {
         let result = self.conn.query_row(
             "SELECT id, path, target_type, namespace, enabled, created_at, last_scan_at, last_scan_git_branch, last_scan_git_commit
              FROM ingestion_targets WHERE id = ?",
@@ -824,7 +855,10 @@ impl SemanticDB {
         Ok(result)
     }
 
-    pub fn get_ingestion_target_by_path(&self, path: &str) -> Result<Option<crate::indexer::IngestionTarget>> {
+    pub fn get_ingestion_target_by_path(
+        &self,
+        path: &str,
+    ) -> Result<Option<crate::indexer::IngestionTarget>> {
         let result = self.conn.query_row(
             "SELECT id, path, target_type, namespace, enabled, created_at, last_scan_at, last_scan_git_branch, last_scan_git_commit
              FROM ingestion_targets WHERE path = ?",
@@ -852,32 +886,38 @@ impl SemanticDB {
             "SELECT id, path, target_type, namespace, enabled, created_at, last_scan_at, last_scan_git_branch, last_scan_git_commit
              FROM ingestion_targets ORDER BY created_at DESC"
         )?;
-        let targets = stmt.query_map([], |row| {
-            Ok(crate::indexer::IngestionTarget {
-                id: row.get(0)?,
-                path: row.get(1)?,
-                target_type: crate::indexer::TargetType::from_str(&row.get::<_, String>(2)?)
-                    .unwrap_or(crate::indexer::TargetType::Directory),
-                namespace: row.get(3)?,
-                enabled: row.get::<_, i32>(4)? != 0,
-                created_at: row.get(5)?,
-                last_scan_at: row.get(6)?,
-                last_scan_git_branch: row.get(7)?,
-                last_scan_git_commit: row.get(8)?,
-            })
-        })?.collect::<std::result::Result<Vec<_>, rusqlite::Error>>()?;
+        let targets = stmt
+            .query_map([], |row| {
+                Ok(crate::indexer::IngestionTarget {
+                    id: row.get(0)?,
+                    path: row.get(1)?,
+                    target_type: crate::indexer::TargetType::from_str(&row.get::<_, String>(2)?)
+                        .unwrap_or(crate::indexer::TargetType::Directory),
+                    namespace: row.get(3)?,
+                    enabled: row.get::<_, i32>(4)? != 0,
+                    created_at: row.get(5)?,
+                    last_scan_at: row.get(6)?,
+                    last_scan_git_branch: row.get(7)?,
+                    last_scan_git_commit: row.get(8)?,
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, rusqlite::Error>>()?;
         Ok(targets)
     }
 
     pub fn delete_ingestion_target(&self, id: &str) -> Result<bool> {
-        let count = self.conn.execute(
-            "DELETE FROM ingestion_targets WHERE id = ?",
-            params![id],
-        )?;
+        let count = self
+            .conn
+            .execute("DELETE FROM ingestion_targets WHERE id = ?", params![id])?;
         Ok(count > 0)
     }
 
-    pub fn update_target_scan(&self, id: &str, branch: Option<&str>, commit: Option<&str>) -> Result<()> {
+    pub fn update_target_scan(
+        &self,
+        id: &str,
+        branch: Option<&str>,
+        commit: Option<&str>,
+    ) -> Result<()> {
         self.conn.execute(
             "UPDATE ingestion_targets SET last_scan_at = ?, last_scan_git_branch = ?, last_scan_git_commit = ? WHERE id = ?",
             params![chrono::Utc::now().timestamp(), branch, commit, id],
@@ -887,7 +927,13 @@ impl SemanticDB {
 
     // ── Tracked files ─────────────────────────────────────────────────────────
 
-    pub fn upsert_tracked_file(&self, target_id: &str, repo_path: &str, branch: &str, commit: Option<&str>) -> Result<()> {
+    pub fn upsert_tracked_file(
+        &self,
+        target_id: &str,
+        repo_path: &str,
+        branch: &str,
+        commit: Option<&str>,
+    ) -> Result<()> {
         let id = Ulid::new().to_string();
         self.conn.execute(
             "INSERT INTO tracked_files (id, target_id, repo_path, last_seen_branch, last_seen_commit, last_seen_at)
@@ -901,7 +947,11 @@ impl SemanticDB {
         Ok(())
     }
 
-    pub fn get_tracked_file(&self, target_id: &str, repo_path: &str) -> Result<Option<(String, Option<String>, i64)>> {
+    pub fn get_tracked_file(
+        &self,
+        target_id: &str,
+        repo_path: &str,
+    ) -> Result<Option<(String, Option<String>, i64)>> {
         let result = self.conn.query_row(
             "SELECT last_seen_branch, last_seen_commit, last_seen_at FROM tracked_files WHERE target_id = ? AND repo_path = ?",
             params![target_id, repo_path],
@@ -919,18 +969,16 @@ impl SemanticDB {
     // ── Stale fact management ─────────────────────────────────────────────────
 
     pub fn mark_fact_stale(&self, fact_id: &str) -> Result<bool> {
-        let count = self.conn.execute(
-            "UPDATE facts SET stale = 1 WHERE id = ?",
-            params![fact_id],
-        )?;
+        let count = self
+            .conn
+            .execute("UPDATE facts SET stale = 1 WHERE id = ?", params![fact_id])?;
         Ok(count > 0)
     }
 
     pub fn restore_fact(&self, fact_id: &str) -> Result<bool> {
-        let count = self.conn.execute(
-            "UPDATE facts SET stale = 0 WHERE id = ?",
-            params![fact_id],
-        )?;
+        let count = self
+            .conn
+            .execute("UPDATE facts SET stale = 0 WHERE id = ?", params![fact_id])?;
         Ok(count > 0)
     }
 
@@ -954,7 +1002,14 @@ impl SemanticDB {
 
     // ── Error logging ─────────────────────────────────────────────────────────
 
-    pub fn log_error(&self, id: &str, component: &str, severity: &str, message: &str, details: Option<&str>) -> Result<()> {
+    pub fn log_error(
+        &self,
+        id: &str,
+        component: &str,
+        severity: &str,
+        message: &str,
+        details: Option<&str>,
+    ) -> Result<()> {
         let timestamp = chrono::Utc::now().timestamp();
         self.conn.execute(
             "INSERT INTO errors (id, timestamp, component, severity, message, details) VALUES (?, ?, ?, ?, ?, ?)",
@@ -963,7 +1018,11 @@ impl SemanticDB {
         Ok(())
     }
 
-    pub fn get_recent_errors(&self, component: Option<&str>, limit: usize) -> Result<Vec<(String, i64, String, String, String, Option<String>)>> {
+    pub fn get_recent_errors(
+        &self,
+        component: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<(String, i64, String, String, String, Option<String>)>> {
         let sql = if component.is_some() {
             "SELECT id, timestamp, component, severity, message, details FROM errors WHERE resolved = 0 AND component = ? ORDER BY timestamp DESC LIMIT ?"
         } else {
@@ -972,13 +1031,27 @@ impl SemanticDB {
         let mut stmt = self.conn.prepare(sql)?;
         if let Some(c) = component {
             let rows = stmt.query_map(params![c, limit as i64], |row| {
-                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?))
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                ))
             })?;
             let collected: std::result::Result<Vec<_>, rusqlite::Error> = rows.collect();
             Ok(collected?)
         } else {
             let rows = stmt.query_map(params![limit as i64], |row| {
-                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?))
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                ))
             })?;
             let collected: std::result::Result<Vec<_>, rusqlite::Error> = rows.collect();
             Ok(collected?)
@@ -999,7 +1072,13 @@ impl SemanticDB {
 fn sanitize_fts5_query(query: &str) -> String {
     query
         .chars()
-        .map(|c| if c == '"' || c == '*' || c == '?' { ' ' } else { c })
+        .map(|c| {
+            if c == '"' || c == '*' || c == '?' {
+                ' '
+            } else {
+                c
+            }
+        })
         .collect::<String>()
         .split_whitespace()
         .collect::<Vec<_>>()

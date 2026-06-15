@@ -1,12 +1,16 @@
 // MCP server implementation using rmcp
 
-use rmcp::{
-    handler::server::router::tool::ToolRouter,
-    model::{CallToolResult, Content, ErrorData, Implementation, ProtocolVersion, ServerCapabilities, ServerInfo},
-    tool, tool_handler, tool_router, ServerHandler,
-};
-use rmcp::handler::server::wrapper::Parameters;
 use chrono::TimeZone;
+use rmcp::handler::server::wrapper::Parameters;
+use rmcp::{
+    ServerHandler,
+    handler::server::router::tool::ToolRouter,
+    model::{
+        CallToolResult, Content, ErrorData, Implementation, ProtocolVersion, ServerCapabilities,
+        ServerInfo,
+    },
+    tool, tool_handler, tool_router,
+};
 
 use crate::core::service::{CoreService, ErrorEntry};
 use crate::urn::SourceUrn;
@@ -168,10 +172,20 @@ impl SunbeamServer {
 
 #[tool_router]
 impl SunbeamServer {
-    #[tool(name = "store_fact", description = "Embed and store a piece of text in semantic memory. Returns the fact ID.")]
-    pub async fn store_fact(&self, Parameters(params): Parameters<StoreFactParams>) -> Result<CallToolResult, ErrorData> {
+    #[tool(
+        name = "store_fact",
+        description = "Embed and store a piece of text in semantic memory. Returns the fact ID."
+    )]
+    pub async fn store_fact(
+        &self,
+        Parameters(params): Parameters<StoreFactParams>,
+    ) -> Result<CallToolResult, ErrorData> {
         let namespace = params.namespace.as_deref();
-        match self.core.store_fact(&params.content, namespace, params.source.as_deref()).await {
+        match self
+            .core
+            .store_fact(&params.content, namespace, params.source.as_deref())
+            .await
+        {
             Ok(fact) => {
                 let source_line = match &fact.source {
                     Some(s) => {
@@ -190,23 +204,42 @@ impl SunbeamServer {
             Err(crate::error::ServerError::InvalidArgument(msg)) => {
                 Ok(CallToolResult::error(vec![Content::text(msg)]))
             }
-            Err(e) => Ok(CallToolResult::error(vec![Content::text(format!("Failed to store: {e}"))])),
+            Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
+                "Failed to store: {e}"
+            ))])),
         }
     }
 
-    #[tool(name = "search_facts", description = "Search semantic memory for content similar to a query. Returns ranked results with similarity scores.")]
-    pub async fn search_facts(&self, Parameters(params): Parameters<SearchFactsParams>) -> Result<CallToolResult, ErrorData> {
+    #[tool(
+        name = "search_facts",
+        description = "Search semantic memory for content similar to a query. Returns ranked results with similarity scores."
+    )]
+    pub async fn search_facts(
+        &self,
+        Parameters(params): Parameters<SearchFactsParams>,
+    ) -> Result<CallToolResult, ErrorData> {
         let limit = params.limit.unwrap_or(10) as usize;
         let namespace = params.namespace.as_deref();
 
-        match self.core.search_facts(&params.query, limit, namespace).await {
-            Ok(results) if results.is_empty() => Ok(CallToolResult::success(vec![Content::text("No results found.")])),
+        match self
+            .core
+            .search_facts(&params.query, limit, namespace)
+            .await
+        {
+            Ok(results) if results.is_empty() => Ok(CallToolResult::success(vec![Content::text(
+                "No results found.",
+            )])),
             Ok(results) => {
                 let mut out = format!("Found {} result(s):\n\n", results.len());
                 for (i, f) in results.iter().enumerate() {
                     out.push_str(&format!(
                         "{}. [{}] score={:.3}  id={}  created={}\n   {}",
-                        i + 1, f.namespace, f.score, f.id, f.created_at, f.content
+                        i + 1,
+                        f.namespace,
+                        f.score,
+                        f.id,
+                        f.created_at,
+                        f.content
                     ));
                     if let Some(s) = &f.source {
                         let desc = SourceUrn::parse(s)
@@ -221,17 +254,31 @@ impl SunbeamServer {
             Err(crate::error::ServerError::InvalidArgument(msg)) => {
                 Ok(CallToolResult::error(vec![Content::text(msg)]))
             }
-            Err(e) => Ok(CallToolResult::error(vec![Content::text(format!("Search failed: {e}"))])),
+            Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
+                "Search failed: {e}"
+            ))])),
         }
     }
 
-    #[tool(name = "update_fact", description = "Update an existing fact in place, keeping the same ID. Re-embeds the new content and replaces the vector.")]
-    pub async fn update_fact(&self, Parameters(params): Parameters<UpdateFactParams>) -> Result<CallToolResult, ErrorData> {
-        match self.core.update_fact(&params.id, &params.content, params.source.as_deref()).await {
+    #[tool(
+        name = "update_fact",
+        description = "Update an existing fact in place, keeping the same ID. Re-embeds the new content and replaces the vector."
+    )]
+    pub async fn update_fact(
+        &self,
+        Parameters(params): Parameters<UpdateFactParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        match self
+            .core
+            .update_fact(&params.id, &params.content, params.source.as_deref())
+            .await
+        {
             Ok(fact) => {
                 let source_line = match &fact.source {
                     Some(s) => {
-                        let desc = SourceUrn::parse(s).map(|u| u.human_readable()).unwrap_or_else(|_| s.clone());
+                        let desc = SourceUrn::parse(s)
+                            .map(|u| u.human_readable())
+                            .unwrap_or_else(|_| s.clone());
                         format!("\nSource: {s}  ({desc})")
                     }
                     None => String::new(),
@@ -244,37 +291,59 @@ impl SunbeamServer {
             Err(crate::error::ServerError::InvalidArgument(msg)) => {
                 Ok(CallToolResult::error(vec![Content::text(msg)]))
             }
-            Err(e) => Ok(CallToolResult::error(vec![Content::text(format!("Update failed: {e}"))])),
+            Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
+                "Update failed: {e}"
+            ))])),
         }
     }
 
     #[tool(name = "delete_fact", description = "Delete a stored fact by its ID.")]
-    pub async fn delete_fact(&self, Parameters(params): Parameters<DeleteFactParams>) -> Result<CallToolResult, ErrorData> {
+    pub async fn delete_fact(
+        &self,
+        Parameters(params): Parameters<DeleteFactParams>,
+    ) -> Result<CallToolResult, ErrorData> {
         match self.core.delete_fact(&params.id).await {
-            Ok(true) => Ok(CallToolResult::success(vec![Content::text(format!("Deleted {}.", params.id))])),
-            Ok(false) => Ok(CallToolResult::success(vec![Content::text(format!("Fact {} not found.", params.id))])),
+            Ok(true) => Ok(CallToolResult::success(vec![Content::text(format!(
+                "Deleted {}.",
+                params.id
+            ))])),
+            Ok(false) => Ok(CallToolResult::success(vec![Content::text(format!(
+                "Fact {} not found.",
+                params.id
+            ))])),
             Err(crate::error::ServerError::InvalidArgument(msg)) => {
                 Ok(CallToolResult::error(vec![Content::text(msg)]))
             }
-            Err(e) => Ok(CallToolResult::error(vec![Content::text(format!("Delete failed: {e}"))])),
+            Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
+                "Delete failed: {e}"
+            ))])),
         }
     }
 
-    #[tool(name = "list_facts", description = "List facts stored in a namespace, most recent first. Supports date range filtering.")]
-    pub async fn list_facts(&self, Parameters(params): Parameters<ListFactsParams>) -> Result<CallToolResult, ErrorData> {
+    #[tool(
+        name = "list_facts",
+        description = "List facts stored in a namespace, most recent first. Supports date range filtering."
+    )]
+    pub async fn list_facts(
+        &self,
+        Parameters(params): Parameters<ListFactsParams>,
+    ) -> Result<CallToolResult, ErrorData> {
         let namespace = params.namespace.as_deref().unwrap_or("default");
         let limit = params.limit.unwrap_or(50) as usize;
         let from = params.from.as_deref();
         let to = params.to.as_deref();
 
         match self.core.list_facts(namespace, limit, from, to).await {
-            Ok(facts) if facts.is_empty() => {
-                Ok(CallToolResult::success(vec![Content::text(format!("No facts in namespace '{namespace}'."))]))
-            }
+            Ok(facts) if facts.is_empty() => Ok(CallToolResult::success(vec![Content::text(
+                format!("No facts in namespace '{namespace}'."),
+            )])),
             Ok(facts) => {
                 let mut out = format!("{} fact(s) in '{namespace}':\n\n", facts.len());
                 for f in &facts {
-                    out.push_str(&format!("id={}\ncreated: {}\n{}", f.id, f.created_at, f.content));
+                    out.push_str(&format!(
+                        "id={}\ncreated: {}\n{}",
+                        f.id, f.created_at, f.content
+                    ));
                     if let Some(s) = &f.source {
                         let desc = SourceUrn::parse(s)
                             .map(|u| u.human_readable())
@@ -288,84 +357,151 @@ impl SunbeamServer {
             Err(crate::error::ServerError::InvalidArgument(msg)) => {
                 Ok(CallToolResult::error(vec![Content::text(msg)]))
             }
-            Err(e) => Ok(CallToolResult::error(vec![Content::text(format!("List failed: {e}"))])),
+            Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
+                "List failed: {e}"
+            ))])),
         }
     }
 
-    #[tool(name = "build_source_urn", description = "Build a valid smem URN from its components. Use this before calling store_fact with a source.")]
-    pub async fn build_source_urn(&self, Parameters(params): Parameters<BuildSourceUrnParams>) -> Result<CallToolResult, ErrorData> {
-        match self.core.build_source_urn(&params.content_type, &params.origin, &params.locator, params.fragment.as_deref()) {
+    #[tool(
+        name = "build_source_urn",
+        description = "Build a valid smem URN from its components. Use this before calling store_fact with a source."
+    )]
+    pub async fn build_source_urn(
+        &self,
+        Parameters(params): Parameters<BuildSourceUrnParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        match self.core.build_source_urn(
+            &params.content_type,
+            &params.origin,
+            &params.locator,
+            params.fragment.as_deref(),
+        ) {
             Ok(urn) => Ok(CallToolResult::success(vec![Content::text(urn)])),
             Err(crate::error::ServerError::InvalidArgument(msg)) => {
                 Ok(CallToolResult::error(vec![Content::text(msg)]))
             }
-            Err(e) => Ok(CallToolResult::error(vec![Content::text(format!("Failed to build URN: {e}"))])),
+            Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
+                "Failed to build URN: {e}"
+            ))])),
         }
     }
 
-    #[tool(name = "parse_source_urn", description = "Parse and validate a smem URN. Returns structured components or an error with the spec.")]
-    pub async fn parse_source_urn(&self, Parameters(params): Parameters<ParseSourceUrnParams>) -> Result<CallToolResult, ErrorData> {
+    #[tool(
+        name = "parse_source_urn",
+        description = "Parse and validate a smem URN. Returns structured components or an error with the spec."
+    )]
+    pub async fn parse_source_urn(
+        &self,
+        Parameters(params): Parameters<ParseSourceUrnParams>,
+    ) -> Result<CallToolResult, ErrorData> {
         match self.core.parse_source_urn(&params.urn) {
             Ok(result) => match serde_json::to_string_pretty(&result) {
                 Ok(json) => Ok(CallToolResult::success(vec![Content::text(json)])),
-                Err(e) => Ok(CallToolResult::error(vec![Content::text(format!("JSON serialization failed: {e}"))])),
+                Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
+                    "JSON serialization failed: {e}"
+                ))])),
             },
             Err(crate::error::ServerError::InvalidArgument(msg)) => {
                 Ok(CallToolResult::error(vec![Content::text(msg)]))
             }
-            Err(e) => Ok(CallToolResult::error(vec![Content::text(format!("Parse failed: {e}"))])),
+            Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
+                "Parse failed: {e}"
+            ))])),
         }
     }
 
-    #[tool(name = "describe_urn_schema", description = "Return the full machine-readable smem URN taxonomy: content types, origins, locator shapes, and examples.")]
+    #[tool(
+        name = "describe_urn_schema",
+        description = "Return the full machine-readable smem URN taxonomy: content types, origins, locator shapes, and examples."
+    )]
     pub async fn describe_urn_schema(&self) -> Result<CallToolResult, ErrorData> {
         match self.core.describe_urn_schema() {
             Ok(result) => match serde_json::to_string_pretty(&result) {
                 Ok(json) => Ok(CallToolResult::success(vec![Content::text(json)])),
-                Err(e) => Ok(CallToolResult::error(vec![Content::text(format!("JSON serialization failed: {e}"))])),
+                Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
+                    "JSON serialization failed: {e}"
+                ))])),
             },
-            Err(e) => Ok(CallToolResult::error(vec![Content::text(format!("Failed: {e}"))])),
+            Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
+                "Failed: {e}"
+            ))])),
         }
     }
 
-    #[tool(name = "add_watch_target", description = "Add a file, directory, or git repository to the automatic indexing watch list. The indexer will scan it immediately and re-ingest when files change.")]
-    pub async fn add_watch_target(&self, Parameters(params): Parameters<AddWatchTargetParams>) -> Result<CallToolResult, ErrorData> {
-        match self.core.add_watch_target(&params.path, params.namespace.as_deref(), params.target_type.as_deref()).await {
-            Ok(ids) if ids.len() == 1 => {
-                Ok(CallToolResult::success(vec![Content::text(format!(
-                    "Watch target added.\nID: {}\nPath: {}", ids[0], params.path
-                ))]))
-            }
+    #[tool(
+        name = "add_watch_target",
+        description = "Add a file, directory, or git repository to the automatic indexing watch list. The indexer will scan it immediately and re-ingest when files change."
+    )]
+    pub async fn add_watch_target(
+        &self,
+        Parameters(params): Parameters<AddWatchTargetParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        match self
+            .core
+            .add_watch_target(
+                &params.path,
+                params.namespace.as_deref(),
+                params.target_type.as_deref(),
+            )
+            .await
+        {
+            Ok(ids) if ids.len() == 1 => Ok(CallToolResult::success(vec![Content::text(format!(
+                "Watch target added.\nID: {}\nPath: {}",
+                ids[0], params.path
+            ))])),
             Ok(ids) => {
                 let count = ids.len();
                 Ok(CallToolResult::success(vec![Content::text(format!(
                     "Watch targets added from glob.\nCount: {count}\nPattern: {}\nIDs: {}",
-                    params.path, ids.join(", ")
+                    params.path,
+                    ids.join(", ")
                 ))]))
             }
             Err(crate::error::ServerError::InvalidArgument(msg)) => {
                 Ok(CallToolResult::error(vec![Content::text(msg)]))
             }
-            Err(e) => Ok(CallToolResult::error(vec![Content::text(format!("Failed to add watch target: {e}"))])),
+            Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
+                "Failed to add watch target: {e}"
+            ))])),
         }
     }
 
-    #[tool(name = "remove_watch_target", description = "Remove a watch target by ID. Stops watching the path.")]
-    pub async fn remove_watch_target(&self, Parameters(params): Parameters<RemoveWatchTargetParams>) -> Result<CallToolResult, ErrorData> {
+    #[tool(
+        name = "remove_watch_target",
+        description = "Remove a watch target by ID. Stops watching the path."
+    )]
+    pub async fn remove_watch_target(
+        &self,
+        Parameters(params): Parameters<RemoveWatchTargetParams>,
+    ) -> Result<CallToolResult, ErrorData> {
         match self.core.remove_watch_target(&params.target_id).await {
-            Ok(true) => Ok(CallToolResult::success(vec![Content::text(format!("Removed watch target {}.", params.target_id))])),
-            Ok(false) => Ok(CallToolResult::success(vec![Content::text(format!("Watch target {} not found.", params.target_id))])),
+            Ok(true) => Ok(CallToolResult::success(vec![Content::text(format!(
+                "Removed watch target {}.",
+                params.target_id
+            ))])),
+            Ok(false) => Ok(CallToolResult::success(vec![Content::text(format!(
+                "Watch target {} not found.",
+                params.target_id
+            ))])),
             Err(crate::error::ServerError::InvalidArgument(msg)) => {
                 Ok(CallToolResult::error(vec![Content::text(msg)]))
             }
-            Err(e) => Ok(CallToolResult::error(vec![Content::text(format!("Failed to remove watch target: {e}"))])),
+            Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
+                "Failed to remove watch target: {e}"
+            ))])),
         }
     }
 
-    #[tool(name = "list_watch_targets", description = "List all indexing watch targets with their current progress and git state.")]
+    #[tool(
+        name = "list_watch_targets",
+        description = "List all indexing watch targets with their current progress and git state."
+    )]
     pub async fn list_watch_targets(&self) -> Result<CallToolResult, ErrorData> {
         match self.core.list_watch_targets().await {
-            Ok(targets) if targets.is_empty() => Ok(CallToolResult::success(vec![Content::text("No watch targets configured.")])),
+            Ok(targets) if targets.is_empty() => Ok(CallToolResult::success(vec![Content::text(
+                "No watch targets configured.",
+            )])),
             Ok(targets) => {
                 let mut out = format!("{} watch target(s):\n\n", targets.len());
                 for t in &targets {
@@ -375,91 +511,196 @@ impl SunbeamServer {
                         (Some(b), None) => format!(" | branch: {b}"),
                         _ => String::new(),
                     };
-                    let progress = self.core.indexer().progress().get(&t.id).map(|p| {
-                        format!(" | pending: {} | processing: {} | completed: {} | failed: {}",
-                            p.files_pending, p.files_processing, p.files_completed, p.files_failed)
-                    }).unwrap_or_default();
+                    let progress = self
+                        .core
+                        .indexer()
+                        .progress()
+                        .get(&t.id)
+                        .map(|p| {
+                            format!(
+                                " | pending: {} | processing: {} | completed: {} | failed: {}",
+                                p.files_pending,
+                                p.files_processing,
+                                p.files_completed,
+                                p.files_failed
+                            )
+                        })
+                        .unwrap_or_default();
                     out.push_str(&format!(
                         "id={}\npath: {}\ntype: {} | namespace: {} | status: {}{}{}\n\n",
-                        t.id, t.path, t.target_type.as_str(), t.namespace, status, git_info, progress
+                        t.id,
+                        t.path,
+                        t.target_type.as_str(),
+                        t.namespace,
+                        status,
+                        git_info,
+                        progress
                     ));
                 }
                 Ok(CallToolResult::success(vec![Content::text(out.trim_end())]))
             }
-            Err(e) => Ok(CallToolResult::error(vec![Content::text(format!("Failed to list watch targets: {e}"))])),
+            Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
+                "Failed to list watch targets: {e}"
+            ))])),
         }
     }
 
-    #[tool(name = "sync_watch_target", description = "Force an immediate rescan and re-ingestion of a watch target.")]
-    pub async fn sync_watch_target(&self, Parameters(params): Parameters<SyncWatchTargetParams>) -> Result<CallToolResult, ErrorData> {
+    #[tool(
+        name = "sync_watch_target",
+        description = "Force an immediate rescan and re-ingestion of a watch target."
+    )]
+    pub async fn sync_watch_target(
+        &self,
+        Parameters(params): Parameters<SyncWatchTargetParams>,
+    ) -> Result<CallToolResult, ErrorData> {
         match self.core.sync_watch_target(&params.target_id) {
             Ok(()) => Ok(CallToolResult::success(vec![Content::text(format!(
-                "Sync started for target {}. Use list_watch_targets to check progress.", params.target_id
+                "Sync started for target {}. Use list_watch_targets to check progress.",
+                params.target_id
             ))])),
             Err(crate::error::ServerError::InvalidArgument(msg)) => {
                 Ok(CallToolResult::error(vec![Content::text(msg)]))
             }
-            Err(e) => Ok(CallToolResult::error(vec![Content::text(format!("Sync failed: {e}"))])),
+            Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
+                "Sync failed: {e}"
+            ))])),
         }
     }
 
-    #[tool(name = "get_index_progress", description = "Get detailed indexing progress for a specific target.")]
-    pub async fn get_index_progress(&self, Parameters(params): Parameters<GetIndexProgressParams>) -> Result<CallToolResult, ErrorData> {
+    #[tool(
+        name = "get_index_progress",
+        description = "Get detailed indexing progress for a specific target."
+    )]
+    pub async fn get_index_progress(
+        &self,
+        Parameters(params): Parameters<GetIndexProgressParams>,
+    ) -> Result<CallToolResult, ErrorData> {
         match self.core.get_index_progress(&params.target_id) {
             Some(p) => Ok(CallToolResult::success(vec![Content::text(format!(
                 "Progress for target {}:\ntotal: {}\npending: {}\nprocessing: {}\ncompleted: {}\nfailed: {}\ncurrent_file: {:?}\nlast_error: {:?}",
                 params.target_id,
-                p.files_total, p.files_pending, p.files_processing, p.files_completed, p.files_failed,
-                p.current_file, p.last_error
+                p.files_total,
+                p.files_pending,
+                p.files_processing,
+                p.files_completed,
+                p.files_failed,
+                p.current_file,
+                p.last_error
             ))])),
-            None => Ok(CallToolResult::success(vec![Content::text(format!("No progress data for target {}.", params.target_id))])),
+            None => Ok(CallToolResult::success(vec![Content::text(format!(
+                "No progress data for target {}.",
+                params.target_id
+            ))])),
         }
     }
 
-    #[tool(name = "restore_stale_fact", description = "Restore a stale (soft-deleted) fact so it appears in search again.")]
-    pub async fn restore_stale_fact(&self, Parameters(params): Parameters<RestoreStaleFactParams>) -> Result<CallToolResult, ErrorData> {
+    #[tool(
+        name = "restore_stale_fact",
+        description = "Restore a stale (soft-deleted) fact so it appears in search again."
+    )]
+    pub async fn restore_stale_fact(
+        &self,
+        Parameters(params): Parameters<RestoreStaleFactParams>,
+    ) -> Result<CallToolResult, ErrorData> {
         match self.core.restore_stale_fact(&params.id) {
-            Ok(true) => Ok(CallToolResult::success(vec![Content::text(format!("Restored fact {}.", params.id))])),
-            Ok(false) => Ok(CallToolResult::success(vec![Content::text(format!("Fact {} not found.", params.id))])),
+            Ok(true) => Ok(CallToolResult::success(vec![Content::text(format!(
+                "Restored fact {}.",
+                params.id
+            ))])),
+            Ok(false) => Ok(CallToolResult::success(vec![Content::text(format!(
+                "Fact {} not found.",
+                params.id
+            ))])),
             Err(crate::error::ServerError::InvalidArgument(msg)) => {
                 Ok(CallToolResult::error(vec![Content::text(msg)]))
             }
-            Err(e) => Ok(CallToolResult::error(vec![Content::text(format!("Restore failed: {e}"))])),
+            Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
+                "Restore failed: {e}"
+            ))])),
         }
     }
 
-    #[tool(name = "get_recent_errors", description = "Retrieve recent system errors logged by the indexer, API, or other components. Use this to diagnose failures.")]
-    pub async fn get_recent_errors(&self, Parameters(params): Parameters<GetRecentErrorsParams>) -> Result<CallToolResult, ErrorData> {
+    #[tool(
+        name = "get_recent_errors",
+        description = "Retrieve recent system errors logged by the indexer, API, or other components. Use this to diagnose failures."
+    )]
+    pub async fn get_recent_errors(
+        &self,
+        Parameters(params): Parameters<GetRecentErrorsParams>,
+    ) -> Result<CallToolResult, ErrorData> {
         let component = params.component.as_deref();
         let limit = params.limit.unwrap_or(10) as usize;
         match self.core.get_recent_errors(component, limit).await {
-            Ok(errors) if errors.is_empty() => Ok(CallToolResult::success(vec![Content::text("No unresolved errors.")])),
+            Ok(errors) if errors.is_empty() => Ok(CallToolResult::success(vec![Content::text(
+                "No unresolved errors.",
+            )])),
             Ok(errors) => {
-                let lines: Vec<String> = errors.into_iter().map(|ErrorEntry { error_id, timestamp, component, severity, message, details }| {
-                    let dt = chrono::Utc.timestamp_opt(timestamp, 0).single()
-                        .map(|d| d.to_rfc3339())
-                        .unwrap_or_else(|| timestamp.to_string());
-                    let detail_line = details.map(|d| format!("\n  details: {d}")).unwrap_or_default();
-                    format!("[{dt}] [{sev}] {comp}\n  id: {id}\n  msg: {msg}{detail_line}", sev=severity, comp=component, id=error_id, msg=message)
-                }).collect();
-                Ok(CallToolResult::success(vec![Content::text(format!("Recent errors:\n\n{}", lines.join("\n\n")))]))
+                let lines: Vec<String> = errors
+                    .into_iter()
+                    .map(
+                        |ErrorEntry {
+                             error_id,
+                             timestamp,
+                             component,
+                             severity,
+                             message,
+                             details,
+                         }| {
+                            let dt = chrono::Utc
+                                .timestamp_opt(timestamp, 0)
+                                .single()
+                                .map(|d| d.to_rfc3339())
+                                .unwrap_or_else(|| timestamp.to_string());
+                            let detail_line = details
+                                .map(|d| format!("\n  details: {d}"))
+                                .unwrap_or_default();
+                            format!(
+                                "[{dt}] [{sev}] {comp}\n  id: {id}\n  msg: {msg}{detail_line}",
+                                sev = severity,
+                                comp = component,
+                                id = error_id,
+                                msg = message
+                            )
+                        },
+                    )
+                    .collect();
+                Ok(CallToolResult::success(vec![Content::text(format!(
+                    "Recent errors:\n\n{}",
+                    lines.join("\n\n")
+                ))]))
             }
             Err(crate::error::ServerError::InvalidArgument(msg)) => {
                 Ok(CallToolResult::error(vec![Content::text(msg)]))
             }
-            Err(e) => Ok(CallToolResult::error(vec![Content::text(format!("Failed to fetch errors: {e}"))])),
+            Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
+                "Failed to fetch errors: {e}"
+            ))])),
         }
     }
 
-    #[tool(name = "resolve_error", description = "Mark a logged error as resolved so it no longer appears in get_recent_errors.")]
-    pub async fn resolve_error(&self, Parameters(params): Parameters<ResolveErrorParams>) -> Result<CallToolResult, ErrorData> {
+    #[tool(
+        name = "resolve_error",
+        description = "Mark a logged error as resolved so it no longer appears in get_recent_errors."
+    )]
+    pub async fn resolve_error(
+        &self,
+        Parameters(params): Parameters<ResolveErrorParams>,
+    ) -> Result<CallToolResult, ErrorData> {
         match self.core.resolve_error(&params.error_id).await {
-            Ok(true) => Ok(CallToolResult::success(vec![Content::text(format!("Resolved error {}.", params.error_id))])),
-            Ok(false) => Ok(CallToolResult::success(vec![Content::text(format!("Error {} not found.", params.error_id))])),
+            Ok(true) => Ok(CallToolResult::success(vec![Content::text(format!(
+                "Resolved error {}.",
+                params.error_id
+            ))])),
+            Ok(false) => Ok(CallToolResult::success(vec![Content::text(format!(
+                "Error {} not found.",
+                params.error_id
+            ))])),
             Err(crate::error::ServerError::InvalidArgument(msg)) => {
                 Ok(CallToolResult::error(vec![Content::text(msg)]))
             }
-            Err(e) => Ok(CallToolResult::error(vec![Content::text(format!("Failed to resolve error: {e}"))])),
+            Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
+                "Failed to resolve error: {e}"
+            ))])),
         }
     }
 }

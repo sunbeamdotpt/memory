@@ -6,8 +6,9 @@ pub fn extract_text(path: &Path) -> Result<String> {
     if is_pdf(path) {
         extract_pdf_text(path)
     } else {
-        std::fs::read_to_string(path)
-            .map_err(|e| ServerError::DatabaseError(format!("failed to read {}: {}", path.display(), e)))
+        std::fs::read_to_string(path).map_err(|e| {
+            ServerError::DatabaseError(format!("failed to read {}: {}", path.display(), e))
+        })
     }
 }
 
@@ -19,11 +20,17 @@ fn is_pdf(path: &Path) -> bool {
 }
 
 fn extract_pdf_text(path: &Path) -> Result<String> {
-    let mut doc = pdf_oxide::api::Pdf::open(path)
-        .map_err(|e| ServerError::DatabaseError(format!("failed to open PDF {}: {}", path.display(), e)))?;
+    let mut doc = pdf_oxide::api::Pdf::open(path).map_err(|e| {
+        ServerError::DatabaseError(format!("failed to open PDF {}: {}", path.display(), e))
+    })?;
 
-    let page_count = doc.page_count()
-        .map_err(|e| ServerError::DatabaseError(format!("failed to get page count for {}: {}", path.display(), e)))?;
+    let page_count = doc.page_count().map_err(|e| {
+        ServerError::DatabaseError(format!(
+            "failed to get page count for {}: {}",
+            path.display(),
+            e
+        ))
+    })?;
 
     let mut full_text = String::new();
     let mut failed_pages = Vec::new();
@@ -47,7 +54,8 @@ fn extract_pdf_text(path: &Path) -> Result<String> {
     if !failed_pages.is_empty() && full_text.is_empty() {
         return Err(ServerError::DatabaseError(format!(
             "PDF extraction failed for all pages in {} (failed pages: {:?})",
-            path.display(), failed_pages
+            path.display(),
+            failed_pages
         )));
     }
 
