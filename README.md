@@ -140,6 +140,9 @@ OIDC takes priority over `MCP_AUTH_TOKEN` if both are set.
 | `MCP_AUTH_TOKEN` | _(unset)_ | Simple bearer token for remote hosting. Unset = localhost-only |
 | `MCP_OIDC_ISSUER` | _(unset)_ | OIDC issuer URL. When set, validates JWT bearer tokens via JWKS |
 | `MCP_OIDC_AUDIENCE` | _(unset)_ | Expected `aud` claim. Leave unset to skip audience validation |
+| `MCP_STDIO_KEEPALIVE_SECONDS` | `30` | Interval between MCP `ping` requests over stdio; `0` disables |
+| `MCP_SSE_KEEPALIVE_SECONDS` | `15` | Interval between SSE keep-alive comments in HTTP mode; `0` disables |
+| `MCP_SESSION_KEEPALIVE_SECONDS` | `300` | Idle timeout before an inactive HTTP session is closed; `0` disables |
 
 ---
 

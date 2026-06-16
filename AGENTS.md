@@ -83,6 +83,9 @@ cargo build --release
 # Run HTTP server on port 3456
 cargo run --release -- http --port 3456
 
+# Run HTTP server with a longer session idle timeout (e.g. 1 hour)
+cargo run --release -- http --port 3456 --session-keepalive-seconds 3600
+
 # Run stdio MCP server (default)
 cargo run --release
 ```
@@ -97,6 +100,9 @@ The release binary is at `target/release/sunbeam-memory`.
 | `MCP_AUTH_TOKEN` | unset | Simple bearer token for remote HTTP mode |
 | `MCP_OIDC_ISSUER` | unset | OIDC issuer URL; enables JWT validation |
 | `MCP_OIDC_AUDIENCE` | unset | Expected `aud` claim (optional) |
+| `MCP_STDIO_KEEPALIVE_SECONDS` | `30` | Interval between MCP `ping` requests over stdio; set to `0` to disable |
+| `MCP_SSE_KEEPALIVE_SECONDS` | `15` | Interval between SSE keep-alive comments in Streamable HTTP mode; set to `0` to disable |
+| `MCP_SESSION_KEEPALIVE_SECONDS` | `300` | Idle timeout before an inactive Streamable HTTP session is closed; set to `0` to disable |
 
 ---
 

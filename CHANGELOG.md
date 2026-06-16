@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.4] — 2026-06-16
+
+### Added
+
+- **rmcp keepalive support** for both MCP transports:
+  - **stdio**: periodic protocol-level `ping` requests to the client (default every 30s; configurable via `MCP_STDIO_KEEPALIVE_SECONDS`).
+  - **Streamable HTTP**: configurable SSE keep-alive comments (default every 15s; `MCP_SSE_KEEPALIVE_SECONDS` / `--sse-keepalive-seconds`) and session idle timeout (default 300s; `MCP_SESSION_KEEPALIVE_SECONDS` / `--session-keepalive-seconds`).
+- New `MemoryConfig` fields: `sse_keepalive_seconds`, `session_keepalive_seconds`, and `stdio_keepalive_seconds`.
+
+### Removed
+
+- Unused `MemoryConfig::session_ttl_hours` field and `MCP_SESSION_TTL_HOURS` env var (session lifetime is managed by rmcp).
+
 ## [0.3.3] — 2026-06-15
 
 ### Fixed

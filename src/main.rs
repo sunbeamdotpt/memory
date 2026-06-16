@@ -12,11 +12,13 @@
 #![deny(clippy::needless_borrow)]
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 
 use rmcp::ServiceExt;
+use rmcp::model::{PingRequest, ServerRequest};
 use sunbeam_memory::{
     config::MemoryConfig,
     connect::{memory_proto::sunbeam::memory::v1::MemoryServiceExt, service::MemoryConnectService},
@@ -45,13 +47,21 @@ struct HttpArgs {
     /// Port to bind the HTTP server to
     #[arg(long, short, default_value = "3456")]
     port: u16,
+    /// Interval in seconds between SSE keep-alive comments. Overrides
+    /// `MCP_SSE_KEEPALIVE_SECONDS`. Set to 0 to disable.
+    #[arg(long)]
+    sse_keepalive_seconds: Option<u64>,
+    /// Idle timeout in seconds for MCP Streamable HTTP sessions. Overrides
+    /// `MCP_SESSION_KEEPALIVE_SECONDS`. Set to 0 to disable.
+    #[arg(long)]
+    session_keepalive_seconds: Option<u64>,
 }
 
 // ── stdio MCP transport ───────────────────────────────────────────────────────
 
 async fn run_stdio() -> Result<()> {
     let config = MemoryConfig::from_env();
-    let core = match init_core(config).await {
+    let core = match init_core(config.clone()).await {
         Ok(c) => c,
         Err(e) => return Err(e),
     };
@@ -68,6 +78,30 @@ async fn run_stdio() -> Result<()> {
         Err(e) => return Err(e),
     };
 
+    if config.stdio_keepalive_seconds > 0 {
+        tracing::info!(
+            "stdio keepalive enabled: ping every {}s",
+            config.stdio_keepalive_seconds
+        );
+        let peer = service.peer().clone();
+        let interval = Duration::from_secs(config.stdio_keepalive_seconds);
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(interval);
+            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            loop {
+                ticker.tick().await;
+                if peer.is_transport_closed() {
+                    break;
+                }
+                let ping = ServerRequest::PingRequest(PingRequest::default());
+                if let Err(e) = peer.send_request(ping).await {
+                    tracing::debug!("stdio keepalive ping failed: {e}");
+                    break;
+                }
+            }
+        });
+    }
+
     match service.waiting().await {
         Ok(_) => Ok(()),
         Err(e) => Err(anyhow::Error::from(e)),
@@ -77,14 +111,20 @@ async fn run_stdio() -> Result<()> {
 // ── HTTP server (axum + ConnectRPC + MCP Streamable HTTP) ─────────────────────
 
 async fn run_http(args: HttpArgs) -> Result<()> {
-    let config = MemoryConfig::from_env();
+    let mut config = MemoryConfig::from_env();
+    if let Some(seconds) = args.sse_keepalive_seconds {
+        config.sse_keepalive_seconds = seconds;
+    }
+    if let Some(seconds) = args.session_keepalive_seconds {
+        config.session_keepalive_seconds = seconds;
+    }
     tracing::info!(
         "sunbeam-memory {}: loading model and opening store at {}…",
         env!("CARGO_PKG_VERSION"),
         config.base_dir
     );
 
-    let core = match init_core(config).await {
+    let core = match init_core(config.clone()).await {
         Ok(c) => c,
         Err(e) => return Err(e),
     };
@@ -99,7 +139,7 @@ async fn run_http(args: HttpArgs) -> Result<()> {
         Err(e) => return Err(e),
     };
 
-    let app = build_http_app(core);
+    let app = build_http_app(core, config);
 
     tracing::info!("sunbeam-memory ready (HTTP on {bind_addr})");
     tracing::info!("  ConnectRPC base: http://{bind_addr}");
@@ -123,7 +163,7 @@ async fn run_http(args: HttpArgs) -> Result<()> {
 ///
 /// Exposes the ConnectRPC `MemoryService` routes, an MCP Streamable HTTP
 /// endpoint at `/mcp`, and a simple root handler.
-pub fn build_http_app(core: CoreService) -> axum::Router {
+pub fn build_http_app(core: CoreService, config: MemoryConfig) -> axum::Router {
     // ConnectRPC adapter serves the generated MemoryService routes.
     let connect_service = Arc::new(MemoryConnectService::new(core.clone()));
     let connect_router = connect_service.register(connectrpc::Router::new());
@@ -131,13 +171,21 @@ pub fn build_http_app(core: CoreService) -> axum::Router {
     // MCP Streamable HTTP transport at /mcp, backed by the same tool server
     // that stdio mode uses.
     let mcp_core = core.clone();
-    let session_manager = Arc::new(
-        rmcp::transport::streamable_http_server::session::local::LocalSessionManager::default(),
-    );
+    let mut session_manager =
+        rmcp::transport::streamable_http_server::session::local::LocalSessionManager::default();
+    session_manager.session_config.keep_alive = (config.session_keepalive_seconds > 0)
+        .then(|| std::time::Duration::from_secs(config.session_keepalive_seconds));
+    let session_manager = Arc::new(session_manager);
+
+    let mut mcp_config =
+        rmcp::transport::streamable_http_server::StreamableHttpServerConfig::default();
+    mcp_config.sse_keep_alive = (config.sse_keepalive_seconds > 0)
+        .then(|| std::time::Duration::from_secs(config.sse_keepalive_seconds));
+
     let mcp_service = rmcp::transport::streamable_http_server::StreamableHttpService::new(
         move || Ok::<_, std::io::Error>(SunbeamServer::new(mcp_core.clone())),
         session_manager,
-        rmcp::transport::streamable_http_server::StreamableHttpServerConfig::default(),
+        mcp_config,
     );
 
     connect_router
@@ -213,7 +261,7 @@ mod tests {
         let watcher = IndexWatcher::new(dummy_tx).unwrap();
         let indexer = IndexService::new(memory.clone(), dummy_rx, watcher);
         let core = CoreService::new(memory, indexer);
-        (build_http_app(core), dir)
+        (build_http_app(core, config), dir)
     }
 
     fn uint64_value(v: &serde_json::Value) -> u64 {
@@ -790,5 +838,70 @@ mod tests {
         .await;
         assert_eq!(status, http::StatusCode::OK);
         assert!(!json["targetIds"].as_array().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_build_http_app_with_disabled_keepalive() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = MemoryConfig {
+            base_dir: dir.path().to_str().unwrap().to_string(),
+            sse_keepalive_seconds: 0,
+            session_keepalive_seconds: 0,
+            ..MemoryConfig::default()
+        };
+        let memory = MemoryService::new(&config).await.unwrap();
+        let (dummy_tx, dummy_rx) = crossbeam_channel::bounded(1);
+        let watcher = IndexWatcher::new(dummy_tx).unwrap();
+        let indexer = IndexService::new(memory.clone(), dummy_rx, watcher);
+        let core = CoreService::new(memory, indexer);
+        // Should build without panicking and a health check should still work.
+        let app = build_http_app(core, config);
+        let (status, json) = send_json(
+            &app,
+            "POST",
+            "/sunbeam.memory.v1.MemoryService/HealthCheck",
+            json!({}),
+        )
+        .await;
+        assert_eq!(status, http::StatusCode::OK);
+        assert_eq!(json["status"], "ok");
+    }
+
+    #[tokio::test]
+    async fn test_build_http_app_with_custom_keepalive() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = MemoryConfig {
+            base_dir: dir.path().to_str().unwrap().to_string(),
+            sse_keepalive_seconds: 60,
+            session_keepalive_seconds: 3600,
+            ..MemoryConfig::default()
+        };
+        let memory = MemoryService::new(&config).await.unwrap();
+        let (dummy_tx, dummy_rx) = crossbeam_channel::bounded(1);
+        let watcher = IndexWatcher::new(dummy_tx).unwrap();
+        let indexer = IndexService::new(memory.clone(), dummy_rx, watcher);
+        let core = CoreService::new(memory, indexer);
+        let app = build_http_app(core, config);
+        let (status, _json) = send_json(
+            &app,
+            "POST",
+            "/sunbeam.memory.v1.MemoryService/HealthCheck",
+            json!({}),
+        )
+        .await;
+        assert_eq!(status, http::StatusCode::OK);
+    }
+
+    #[test]
+    fn test_http_args_keepalive_flags() {
+        use clap::Parser;
+
+        let args = super::HttpArgs::parse_from(["sunbeam-memory", "--sse-keepalive-seconds", "60"]);
+        assert_eq!(args.sse_keepalive_seconds, Some(60));
+        assert_eq!(args.session_keepalive_seconds, None);
+
+        let args =
+            super::HttpArgs::parse_from(["sunbeam-memory", "--session-keepalive-seconds", "3600"]);
+        assert_eq!(args.session_keepalive_seconds, Some(3600));
     }
 }

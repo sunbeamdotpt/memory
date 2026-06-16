@@ -1,6 +1,11 @@
+use std::sync::Mutex;
+
 use sunbeam_memory::config::MemoryConfig;
 use sunbeam_memory::embedding::service::EmbeddingError;
 use sunbeam_memory::error::ServerError;
+
+// Serialize tests that mutate process-wide environment variables.
+static ENV_LOCK: Mutex<()> = Mutex::new(());
 
 #[test]
 fn test_config_default() {
@@ -9,7 +14,9 @@ fn test_config_default() {
     assert_eq!(config.auth_token, None);
     assert_eq!(config.oidc_issuer, None);
     assert_eq!(config.oidc_audience, None);
-    assert_eq!(config.session_ttl_hours, 24);
+    assert_eq!(config.sse_keepalive_seconds, 15);
+    assert_eq!(config.session_keepalive_seconds, 300);
+    assert_eq!(config.stdio_keepalive_seconds, 30);
 }
 
 #[test]
@@ -35,6 +42,19 @@ fn test_config_clone() {
     let config = MemoryConfig::default();
     let cloned = config.clone();
     assert_eq!(config.base_dir, cloned.base_dir);
+}
+
+#[test]
+fn test_config_keepalive_defaults_can_be_overridden() {
+    let config = MemoryConfig {
+        sse_keepalive_seconds: 60,
+        session_keepalive_seconds: 3600,
+        stdio_keepalive_seconds: 10,
+        ..MemoryConfig::default()
+    };
+    assert_eq!(config.sse_keepalive_seconds, 60);
+    assert_eq!(config.session_keepalive_seconds, 3600);
+    assert_eq!(config.stdio_keepalive_seconds, 10);
 }
 
 // ── Error conversions ─────────────────────────────────────────────────────────
@@ -81,4 +101,23 @@ fn test_rusqlite_error_into_server_error() {
     let sqlite_err = rusqlite::Error::InvalidQuery;
     let e: ServerError = sqlite_err.into();
     assert!(e.to_string().contains("Query is not read-only"));
+}
+
+#[test]
+fn test_config_from_env_keepalive_values() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    unsafe {
+        std::env::set_var("MCP_SSE_KEEPALIVE_SECONDS", "60");
+        std::env::set_var("MCP_SESSION_KEEPALIVE_SECONDS", "1800");
+        std::env::set_var("MCP_STDIO_KEEPALIVE_SECONDS", "0");
+    }
+    let config = MemoryConfig::from_env();
+    assert_eq!(config.sse_keepalive_seconds, 60);
+    assert_eq!(config.session_keepalive_seconds, 1800);
+    assert_eq!(config.stdio_keepalive_seconds, 0);
+    unsafe {
+        std::env::remove_var("MCP_SSE_KEEPALIVE_SECONDS");
+        std::env::remove_var("MCP_SESSION_KEEPALIVE_SECONDS");
+        std::env::remove_var("MCP_STDIO_KEEPALIVE_SECONDS");
+    }
 }

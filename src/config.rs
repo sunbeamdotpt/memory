@@ -11,8 +11,18 @@ pub struct MemoryConfig {
     /// Optional OIDC audience claim to validate. Read from `MCP_OIDC_AUDIENCE`.
     /// Leave unset to skip audience validation.
     pub oidc_audience: Option<String>,
-    /// Session TTL in hours. Defaults to 24. Read from `MCP_SESSION_TTL_HOURS`.
-    pub session_ttl_hours: u64,
+    /// Interval in seconds between SSE keep-alive comments on Streamable HTTP
+    /// connections. Defaults to 15 seconds; set to 0 to disable. Read from
+    /// `MCP_SSE_KEEPALIVE_SECONDS`.
+    pub sse_keepalive_seconds: u64,
+    /// Idle timeout in seconds for MCP Streamable HTTP sessions. A session is
+    /// closed after this duration without any activity. Defaults to 300 seconds
+    /// (5 minutes); set to 0 to disable. Read from `MCP_SESSION_KEEPALIVE_SECONDS`.
+    pub session_keepalive_seconds: u64,
+    /// Interval in seconds between protocol-level `ping` requests sent over the
+    /// stdio transport. Defaults to 30 seconds; set to 0 to disable. Read from
+    /// `MCP_STDIO_KEEPALIVE_SECONDS`.
+    pub stdio_keepalive_seconds: u64,
 }
 
 impl Default for MemoryConfig {
@@ -25,7 +35,9 @@ impl Default for MemoryConfig {
             auth_token: None,
             oidc_issuer: None,
             oidc_audience: None,
-            session_ttl_hours: 24,
+            sse_keepalive_seconds: 15,
+            session_keepalive_seconds: 300,
+            stdio_keepalive_seconds: 30,
         }
     }
 }
@@ -42,10 +54,16 @@ impl MemoryConfig {
             auth_token: std::env::var("MCP_AUTH_TOKEN").ok(),
             oidc_issuer: std::env::var("MCP_OIDC_ISSUER").ok(),
             oidc_audience: std::env::var("MCP_OIDC_AUDIENCE").ok(),
-            session_ttl_hours: std::env::var("MCP_SESSION_TTL_HOURS")
-                .ok()
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(24),
+            sse_keepalive_seconds: parse_env_u64("MCP_SSE_KEEPALIVE_SECONDS", 15),
+            session_keepalive_seconds: parse_env_u64("MCP_SESSION_KEEPALIVE_SECONDS", 300),
+            stdio_keepalive_seconds: parse_env_u64("MCP_STDIO_KEEPALIVE_SECONDS", 30),
         }
     }
+}
+
+fn parse_env_u64(name: &str, default: u64) -> u64 {
+    std::env::var(name)
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(default)
 }
