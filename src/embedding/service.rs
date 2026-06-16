@@ -4,7 +4,7 @@
 
 use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
 use once_cell::sync::Lazy;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use thiserror::Error;
 
@@ -50,6 +50,55 @@ impl EmbeddingModelType {
             EmbeddingModelType::CodeBert => EmbeddingModel::AllMpnetBaseV2,
             EmbeddingModelType::GraphCodeBert => EmbeddingModel::NomicEmbedTextV1,
         }
+    }
+}
+
+// ── Bounded in-memory cache for embeddings ────────────────────────────────────
+// Prevents unbounded growth while still avoiding repeated inference for
+// frequently seen texts. Eviction is FIFO once the capacity is reached.
+
+struct BoundedCache<K, V> {
+    map: HashMap<K, V>,
+    order: VecDeque<K>,
+    capacity: usize,
+}
+
+impl<K: Eq + std::hash::Hash + Clone, V> BoundedCache<K, V> {
+    fn new(capacity: usize) -> Self {
+        Self {
+            map: HashMap::with_capacity(capacity),
+            order: VecDeque::with_capacity(capacity),
+            capacity,
+        }
+    }
+
+    fn get<Q: Eq + std::hash::Hash + ?Sized>(&self, key: &Q) -> Option<&V>
+    where
+        K: std::borrow::Borrow<Q>,
+    {
+        self.map.get(key)
+    }
+
+    fn contains_key<Q: Eq + std::hash::Hash + ?Sized>(&self, key: &Q) -> bool
+    where
+        K: std::borrow::Borrow<Q>,
+    {
+        self.map.contains_key(key)
+    }
+
+    #[allow(clippy::map_entry)]
+    fn insert(&mut self, key: K, value: V) {
+        if self.map.contains_key(&key) {
+            self.map.insert(key, value);
+            return;
+        }
+        if self.order.len() >= self.capacity
+            && let Some(old) = self.order.pop_front()
+        {
+            self.map.remove(&old);
+        }
+        self.order.push_back(key.clone());
+        self.map.insert(key, value);
     }
 }
 
@@ -103,10 +152,13 @@ static MODEL_CACHE: Lazy<Mutex<ModelCache>> = Lazy::new(|| Mutex::new(ModelCache
 pub struct EmbeddingService {
     model: CachedModel,
     model_type: EmbeddingModelType,
-    query_cache: Arc<Mutex<HashMap<String, Vec<f32>>>>,
+    query_cache: Arc<Mutex<BoundedCache<String, Vec<f32>>>>,
 }
 
 impl EmbeddingService {
+    /// Default maximum number of unique texts kept in the per-service embedding cache.
+    const DEFAULT_CACHE_CAPACITY: usize = 1024;
+
     /// Obtain a service backed by the globally cached model. Loading from disk
     /// only happens the first time a given model type is requested.
     pub async fn new(model_type: EmbeddingModelType) -> Result<Self, EmbeddingError> {
@@ -114,7 +166,7 @@ impl EmbeddingService {
         Ok(Self {
             model,
             model_type,
-            query_cache: Arc::new(Mutex::new(HashMap::new())),
+            query_cache: Arc::new(Mutex::new(BoundedCache::new(Self::DEFAULT_CACHE_CAPACITY))),
         })
     }
 

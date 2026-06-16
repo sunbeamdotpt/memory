@@ -5,6 +5,26 @@ use sunbeam_memory::semantic::store::SemanticStore;
 use sunbeam_memory::semantic::{SemanticConfig, SemanticFact};
 use ulid::Ulid;
 
+/// Build an old-style F32 USearch index blob for migration tests.
+fn f32_index_blob(dimension: usize) -> Vec<u8> {
+    let options = usearch::IndexOptions {
+        dimensions: dimension,
+        metric: usearch::MetricKind::Cos,
+        quantization: usearch::ScalarKind::F32,
+        connectivity: 16,
+        expansion_add: 40,
+        expansion_search: 16,
+        ..Default::default()
+    };
+    let index = usearch::new_index(&options).unwrap();
+    index.reserve(10).unwrap();
+    let embedding: Vec<f32> = (0..dimension).map(|i| (i % 10) as f32 / 10.0).collect();
+    index.add(1, &embedding).unwrap();
+    let mut buf = vec![0u8; index.serialized_length()];
+    index.save_to_buffer(&mut buf).unwrap();
+    buf
+}
+
 fn fact(id: &str, content: &str, embedding: Vec<f32>) -> SemanticFact {
     SemanticFact {
         id: id.to_string(),
@@ -350,4 +370,44 @@ async fn test_rebuild_vectors_error_from_embed_fn() {
     assert!(result.is_err());
     let err = result.unwrap_err().to_string();
     assert!(err.contains("boom"));
+}
+
+#[test]
+fn test_f32_index_blob_migrates_to_f16() {
+    let dir = tempfile::tempdir().unwrap();
+    let base_dir = dir.path().to_str().unwrap();
+
+    // Create a database with an F32 index blob and a matching vector row.
+    {
+        let mut db = SemanticDB::new(base_dir, 768).unwrap();
+        let fact = SemanticFact {
+            id: "f1".to_string(),
+            namespace: "ns".to_string(),
+            content: "migration test".to_string(),
+            created_at: 0,
+            embedding: (0..768).map(|i| (i % 10) as f32 / 10.0).collect(),
+            source: None,
+        };
+        db.add_fact(&fact).unwrap();
+    }
+
+    // Overwrite the saved blob with an F32-serialized index.
+    {
+        let db_path = std::path::Path::new(base_dir).join("semantic.db");
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        let blob = f32_index_blob(768);
+        conn.execute(
+            "INSERT OR REPLACE INTO _usearch_index (id, blob) VALUES (1, ?)",
+            [&blob],
+        )
+        .unwrap();
+    }
+
+    // Reopening should detect the mismatch and rebuild from vectors.
+    let db = SemanticDB::new(base_dir, 768).unwrap();
+    let results = db.search_similar(&[0.0; 768], 5, None).unwrap();
+    assert!(
+        results.iter().any(|(f, _)| f.id == "f1"),
+        "fact should be searchable after F32->F16 migration"
+    );
 }

@@ -37,7 +37,7 @@ pub fn scan_target(path: &Path) -> Result<Vec<PathBuf>> {
 
 /// Check if a file is likely binary by extension, magic bytes, or null-byte content.
 ///
-/// This reads up to the first 8 KB of the file — fast enough to call from async code.
+/// This reads at most the first 8 KB of the file — fast enough to call from async code.
 pub fn is_likely_binary(path: &Path) -> bool {
     // 1. Fast path: known binary extensions
     if has_binary_extension(path) {
@@ -45,9 +45,17 @@ pub fn is_likely_binary(path: &Path) -> bool {
     }
 
     // 2. Read the first chunk and inspect magic bytes / null bytes
-    let head = match std::fs::read(path) {
-        Ok(data) => data,
+    const HEAD_LIMIT: usize = 8192;
+    let file = match std::fs::File::open(path) {
+        Ok(f) => f,
         Err(_) => return false, // Can't read — let downstream handle it
+    };
+
+    use std::io::Read;
+    let mut head = Vec::with_capacity(HEAD_LIMIT);
+    match std::io::Read::take(file, HEAD_LIMIT as u64).read_to_end(&mut head) {
+        Ok(_) => {}
+        Err(_) => return false,
     };
 
     if head.is_empty() {
@@ -59,9 +67,8 @@ pub fn is_likely_binary(path: &Path) -> bool {
         return true;
     }
 
-    // Check for null bytes in the first 8 KB (strong signal for binary data)
-    let scan_len = head.len().min(8192);
-    head[..scan_len].contains(&0)
+    // Check for null bytes in the first chunk (strong signal for binary data)
+    head.contains(&0)
 }
 
 fn has_binary_extension(path: &Path) -> bool {

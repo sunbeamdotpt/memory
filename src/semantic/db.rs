@@ -213,19 +213,28 @@ impl SemanticDB {
         Ok(db)
     }
 
-    /// Load an existing USearch index from SQLite blob, or create a fresh one.
-    fn load_or_create_index(conn: &Connection, dimension: usize) -> Result<IndexLoadResult> {
-        let options = usearch::IndexOptions {
+    /// Default USearch index options tuned for lower memory usage.
+    ///
+    /// - F16 quantization halves per-vector RAM vs F32.
+    /// - Lower connectivity (8 vs 16) shrinks the HNSW graph.
+    ///
+    /// These values trade a small amount of recall for substantially less memory.
+    fn default_index_options(dimension: usize) -> usearch::IndexOptions {
+        usearch::IndexOptions {
             dimensions: dimension,
             metric: usearch::MetricKind::Cos,
-            quantization: usearch::ScalarKind::F32,
-            connectivity: 16,
-            expansion_add: 40,
-            expansion_search: 16,
+            quantization: usearch::ScalarKind::F16,
+            connectivity: 8,
+            expansion_add: 20,
+            expansion_search: 8,
             ..Default::default()
-        };
+        }
+    }
 
-        let index = usearch::new_index(&options)?;
+    /// Load an existing USearch index from SQLite blob, or create a fresh one.
+    fn load_or_create_index(conn: &Connection, dimension: usize) -> Result<IndexLoadResult> {
+        let options = Self::default_index_options(dimension);
+        let mut index = usearch::new_index(&options)?;
 
         let blob: Option<Vec<u8>> = conn
             .query_row("SELECT blob FROM _usearch_index WHERE id = 1", [], |row| {
@@ -233,8 +242,16 @@ impl SemanticDB {
             })
             .optional()?;
 
-        if let Some(data) = blob.filter(|d| !d.is_empty()) {
-            index.load_from_buffer(&data)?;
+        if let Some(data) = blob.filter(|d| !d.is_empty())
+            && let Err(e) = index.load_from_buffer(&data)
+        {
+            // Older blobs may have been serialized with different options
+            // (e.g. F32). Rebuild from the vector table instead.
+            tracing::warn!(
+                "USearch index blob load failed ({}); rebuilding from vectors",
+                e
+            );
+            index = usearch::new_index(&options)?;
         }
 
         // Reserve capacity after loading — load_from_buffer overwrites reservations.
@@ -359,16 +376,7 @@ impl SemanticDB {
 
     /// Rebuild the in-memory USearch index from the `_usearch_vectors` table.
     fn rebuild_index_from_vectors(&mut self) -> Result<()> {
-        let options = usearch::IndexOptions {
-            dimensions: self.dimension,
-            metric: usearch::MetricKind::Cos,
-            quantization: usearch::ScalarKind::F32,
-            connectivity: 16,
-            expansion_add: 40,
-            expansion_search: 16,
-            ..Default::default()
-        };
-
+        let options = Self::default_index_options(self.dimension);
         self.index = usearch::new_index(&options)?;
         self.index
             .reserve(self.key_to_fact.len().saturating_add(1000))?;
@@ -845,16 +853,7 @@ impl SemanticDB {
 
     /// Rebuild the USearch index with a new dimension. Used on model switch.
     pub fn recreate_vec_table(&mut self, new_dimension: usize) -> Result<()> {
-        let options = usearch::IndexOptions {
-            dimensions: new_dimension,
-            metric: usearch::MetricKind::Cos,
-            quantization: usearch::ScalarKind::F32,
-            connectivity: 16,
-            expansion_add: 40,
-            expansion_search: 16,
-            ..Default::default()
-        };
-
+        let options = Self::default_index_options(new_dimension);
         self.index = usearch::new_index(&options)?;
         self.index.reserve(1000)?;
         self.dimension = new_dimension;

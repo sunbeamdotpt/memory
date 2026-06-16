@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.5] — 2026-06-16
+
+### Changed
+
+- Reduced in-memory vector index footprint:
+  - USearch vectors now stored as **F16** instead of F32 (~50% reduction in per-vector RAM).
+  - USearch HNSW connectivity reduced from 16 to 8 with lower expansion values, shrinking graph memory.
+  - Existing F32 index blobs are automatically rebuilt from the `_usearch_vectors` table on startup.
+- Replaced the unbounded per-service embedding cache with a bounded FIFO cache (capacity 1024) so repeated ingestion/search cannot grow memory without limit.
+- `scanner::is_likely_binary` now reads at most 8 KB instead of the entire file when probing for binary content.
+
+## [Unreleased]
+
 ## [0.3.4] — 2026-06-16
 
 ### Added
