@@ -108,7 +108,7 @@ With `MCP_AUTH_TOKEN` set, the server binds to `0.0.0.0` and requires `Authoriza
 
 ## Run as a systemd user daemon (Kimi Code / local HTTP)
 
-You can keep the HTTP server running in the background as a user-scoped systemd service. This is the easiest way to connect Kimi Code (or any local MCP client) over HTTP without managing a terminal window.
+You can keep the HTTP server running in the background as a user-scoped systemd service. This is the easiest way to connect Kimi Code (or any local MCP client) over HTTP without managing a terminal window on Linux.
 
 **1. Create the service file**
 
@@ -123,13 +123,13 @@ After=network.target
 Type=simple
 ExecStart=/usr/local/bin/sunbeam-memory http --port 3456
 Restart=on-failure
-Environment="MCP_MEMORY_BASE_DIR=%h/.local/share/sunbeam/memory"
+Environment="MCP_MEMORY_BASE_DIR=~/.local/share/sunbeam/memory"
 
 [Install]
 WantedBy=default.target
 ```
 
-Adjust `ExecStart` to the path of your `sunbeam-memory` binary (for example, `ExecStart=%h/development/sunbeam/memory/target/release/sunbeam-memory http --port 3456` if you are running from a local build).
+Adjust `ExecStart` to the path of your `sunbeam-memory` binary (for example, `ExecStart=~/development/sunbeam/memory/target/release/sunbeam-memory http --port 3456` if you are running from a local build).
 
 **2. Start and enable the service**
 
