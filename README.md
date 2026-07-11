@@ -104,6 +104,58 @@ With `MCP_AUTH_TOKEN` set, the server binds to `0.0.0.0` and requires `Authoriza
 
 **Tip:** Put a reverse proxy (nginx, Caddy) in front with TLS so your token travels over HTTPS.
 
+---
+
+## Run as a systemd user daemon (Kimi Code / local HTTP)
+
+You can keep the HTTP server running in the background as a user-scoped systemd service. This is the easiest way to connect Kimi Code (or any local MCP client) over HTTP without managing a terminal window.
+
+**1. Create the service file**
+
+`~/.config/systemd/user/sunbeam-memory.service`:
+
+```ini
+[Unit]
+Description=Sunbeam Memory MCP Server
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/sunbeam-memory http --port 3456
+Restart=on-failure
+Environment="MCP_MEMORY_BASE_DIR=%h/.local/share/sunbeam/memory"
+
+[Install]
+WantedBy=default.target
+```
+
+Adjust `ExecStart` to the path of your `sunbeam-memory` binary (for example, `ExecStart=%h/development/sunbeam/memory/target/release/sunbeam-memory http --port 3456` if you are running from a local build).
+
+**2. Start and enable the service**
+
+```bash
+systemctl --user daemon-reload
+systemctl --user enable sunbeam-memory.service
+systemctl --user start sunbeam-memory.service
+systemctl --user status sunbeam-memory.service
+```
+
+**3. Configure Kimi Code**
+
+Add the server to `~/.kimi-code/mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "sunbeam-memory": {
+      "url": "http://127.0.0.1:3456/mcp"
+    }
+  }
+}
+```
+
+Because no `MCP_AUTH_TOKEN` is set, the server binds to `127.0.0.1` only and does not require authentication, which is safe for a local daemon.
+
 ### OIDC / OAuth2 authentication
 
 If you already have an OIDC provider (Keycloak, Auth0, Dex, Kratos+Hydra, etc.), you can use it instead of a raw token. The server fetches the JWKS at startup and validates RS256/ES256 JWTs on every request.
