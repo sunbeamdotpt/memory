@@ -147,7 +147,7 @@ Add the server to `~/.kimi-code/mcp.json`:
 ```json
 {
   "mcpServers": {
-    "sunbeam-memory": {
+    "memory": {
       "url": "http://127.0.0.1:3456/mcp"
     }
   }
