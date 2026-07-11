@@ -123,13 +123,13 @@ After=network.target
 Type=simple
 ExecStart=/usr/local/bin/sunbeam-memory http --port 3456
 Restart=on-failure
-Environment="MCP_MEMORY_BASE_DIR=~/.local/share/sunbeam/memory"
+Environment="MCP_MEMORY_BASE_DIR=%h/.local/share/sunbeam/memory"
 
 [Install]
 WantedBy=default.target
 ```
 
-Adjust `ExecStart` to the path of your `sunbeam-memory` binary (for example, `ExecStart=~/development/sunbeam/memory/target/release/sunbeam-memory http --port 3456` if you are running from a local build).
+Adjust `ExecStart` to the path of your `sunbeam-memory` binary (for example, `ExecStart=%h/development/sunbeam/memory/target/release/sunbeam-memory http --port 3456` if you are running from a local build).
 
 **2. Start and enable the service**
 
