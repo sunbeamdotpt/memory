@@ -1,5 +1,8 @@
 # sunbeam-memory
 
+[![Matrix](https://img.shields.io/badge/chat-%23hello%3Asunbeam.pt-0dbd8b?logo=matrix)](https://matrix.to/#/#hello:sunbeam.pt)
+[![License](https://img.shields.io/github/license/sunbeamdotpt/memory)](LICENSE.md)
+
 A personal semantic memory server for AI assistants. Store facts, code snippets, notes, and documents with vector embeddings — then let your AI search them by meaning, not just keywords.
 
 Also watches directories and auto-ingests files (code, PDFs, text) so your memory stays in sync with your projects.
